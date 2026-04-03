@@ -1,0 +1,71 @@
+{
+  "settings": {
+    "default_timer_seconds": 30
+  },
+  "teams": [
+    {
+      "id": 1,
+      "name": "Знатоки",
+      "score": 300
+    },
+    {
+      "id": 2,
+      "name": "Эрудиты",
+      "score": 0
+    }
+  ],
+  "rounds": [
+    {
+      "id": 1,
+      "name": "Раунд 1"
+    },
+    {
+      "id": 2,
+      "name": "Видеораунд"
+    }
+  ],
+  "questions": [
+    {
+      "id": 1,
+      "round_id": 1,
+      "text": "Столица Франции?",
+      "answer": "Париж",
+      "timer_seconds": 30,
+      "points": 100,
+      "used": false,
+      "team_id": null,
+      "category": "География",
+      "difficulty": "easy",
+      "media_type": null,
+      "media_path": null
+    },
+    {
+      "id": 2,
+      "round_id": 1,
+      "text": "Сколько планет в Солнечной системе?",
+      "answer": "8",
+      "timer_seconds": 15,
+      "points": 200,
+      "used": false,
+      "team_id": 1,
+      "category": "Наука",
+      "difficulty": "medium",
+      "media_type": null,
+      "media_path": null
+    },
+    {
+      "id": 3,
+      "round_id": 2,
+      "text": "Посмотрите видеоролик и ответьте на вопрос.",
+      "answer": "Секретный объект",
+      "timer_seconds": 20,
+      "points": 300,
+      "used": false,
+      "team_id": null,
+      "category": "Видео",
+      "difficulty": "hard",
+      "media_type": "video",
+      "media_path": "data/media/video_secret_1.mp4"
+    }
+  ]
+}

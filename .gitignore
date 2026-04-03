@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing / coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+
+# Secrets / local config
+.env.local
+.env.*.local
+
+# SQLite (если буду использовать локально)
+*.db
+*.sqlite3
+
+# Misc
+*.swp
+*.swo
