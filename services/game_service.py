@@ -4,6 +4,7 @@ from typing import Optional
 
 from models.game_state import GameState
 from models.question import Question
+from models.team import Team
 from services.data_loader import DataLoader
 from services.question_service import QuestionService
 from services.score_service import ScoreService
@@ -37,6 +38,68 @@ class GameService:
         self.wheel_service = WheelService()
         self.state = GameState()
 
+        self.round_team_order: list[Team] = []
+        self.round_turn_index: int = 0
+
+    def _build_round_team_order(self) -> list[Team]:
+        """
+        Build alphabetical team order for active round.
+        Построить алфавитный порядок команд для активного раунда.
+        """
+        return sorted(self.teams, key=lambda team: team.name.casefold())
+
+    def _reset_round_queue(self) -> None:
+        """
+        Reset round queue state.
+        Сбросить состояние очереди текущего раунда.
+        """
+        self.round_team_order = self._build_round_team_order()
+        self.round_turn_index = 0
+
+    def _get_active_team(self) -> Optional[Team]:
+        """
+        Return current answering team.
+        Вернуть текущую отвечающую команду.
+        """
+        if not self.round_team_order:
+            return None
+
+        if self.round_turn_index < 0 or self.round_turn_index >= len(self.round_team_order):
+            self.round_turn_index = 0
+
+        return self.round_team_order[self.round_turn_index]
+
+    def _get_next_team(self) -> Optional[Team]:
+        """
+        Return next team in turn order.
+        Вернуть следующую команду в очереди.
+        """
+        if not self.round_team_order:
+            return None
+
+        next_index = (self.round_turn_index + 1) % len(self.round_team_order)
+        return self.round_team_order[next_index]
+
+    def _advance_turn(self) -> None:
+        """
+        Move turn pointer to next team.
+        Сдвинуть очередь хода к следующей команде.
+        """
+        if not self.round_team_order:
+            return
+
+        self.round_turn_index = (self.round_turn_index + 1) % len(self.round_team_order)
+
+    def _get_round_name(self, round_id: int) -> str:
+        """
+        Return round name by identifier.
+        Вернуть имя раунда по идентификатору.
+        """
+        for round_item in self.rounds:
+            if round_item.id == round_id:
+                return round_item.name
+        return f"Раунд {round_id}"
+
     def choose_round(self) -> Optional[int]:
         """
         Ask user to select a round.
@@ -44,7 +107,12 @@ class GameService:
         """
         print("\nДоступные раунды:")
         for round_item in self.rounds:
-            print(f"{round_item.id}. {round_item.name}")
+            total_questions = len(self.question_service.get_questions_by_round(round_item.id))
+            open_questions = self.question_service.get_unused_count_by_round(round_item.id)
+            print(
+                f"{round_item.id}. {round_item.name} | "
+                f"всего вопросов: {total_questions} | осталось: {open_questions}"
+            )
 
         raw_value = input("Введите id раунда или q для выхода: ").strip()
         if raw_value.lower() == "q":
@@ -61,32 +129,6 @@ class GameService:
                 return round_id
 
         print("Раунд не найден.")
-        return None
-
-    def choose_team(self) -> Optional[int]:
-        """
-        Ask user to select a team.
-        Запросить у пользователя выбор команды.
-        """
-        print("\nДоступные команды:")
-        for team in self.teams:
-            print(f"{team.id}. {team.name} | очки: {team.score}")
-
-        raw_value = input("Введите id команды или q для выхода: ").strip()
-        if raw_value.lower() == "q":
-            return None
-
-        try:
-            team_id = int(raw_value)
-        except ValueError:
-            print("Некорректный ввод команды.")
-            return None
-
-        for team in self.teams:
-            if team.id == team_id:
-                return team_id
-
-        print("Команда не найдена.")
         return None
 
     def play_media_if_needed(self, question: Question) -> None:
@@ -115,7 +157,11 @@ class GameService:
         print("Пока ведущий может открыть файл вручную.")
         input("После завершения видео нажмите Enter для запуска таймера...")
 
-    def run_wheel_for_question(self, available_questions: list[Question], selected_question: Question) -> None:
+    def run_wheel_for_question(
+        self,
+        available_questions: list[Question],
+        selected_question: Question,
+    ) -> None:
         """
         Simulate wheel spinning until selected question.
         Имитировать вращение колеса до выбранного вопроса.
@@ -156,31 +202,37 @@ class GameService:
         self.state.last_result_correct = False
         print("Очки не начислены.")
 
-    def play_turn(self, round_id: int, team_id: int) -> None:
+    def play_turn(self, round_id: int) -> bool:
         """
-        Play one full game turn.
-        Сыграть один полный игровой ход.
+        Play one full game turn for current team in round queue.
+        Сыграть один полный игровой ход для текущей команды по очереди раунда.
         """
-        available_questions = self.question_service.get_available_questions(
-            round_id=round_id,
-            team_id=team_id,
-        )
+        if not self.round_team_order:
+            self._reset_round_queue()
 
+        active_team = self._get_active_team()
+        if active_team is None:
+            print("Нет доступных команд.")
+            return False
+
+        available_questions = self.question_service.get_available_questions(round_id=round_id)
         if not available_questions:
             print("Для выбранного раунда больше нет доступных вопросов.")
-            return
+            return False
 
-        selected_question = self.question_service.pick_random_question(
-            round_id=round_id,
-            team_id=team_id,
-        )
+        selected_question = self.question_service.pick_random_question(round_id=round_id)
         if selected_question is None:
             print("Не удалось выбрать вопрос.")
-            return
+            return False
 
         self.state.current_round_id = round_id
-        self.state.current_team_id = team_id
+        self.state.current_team_id = active_team.id
         self.state.current_question_id = selected_question.id
+
+        print(f"\nСейчас отвечает команда: {active_team.name}")
+        next_team = self._get_next_team()
+        if next_team is not None:
+            print(f"Следующая команда: {next_team.name}")
 
         self.run_wheel_for_question(
             available_questions=available_questions,
@@ -194,13 +246,13 @@ class GameService:
         input("Нажмите Enter для запуска таймера...")
         self.timer_service.run_timer(timer_seconds)
 
-        self.handle_question_result(team_id=team_id, question=selected_question)
+        self.handle_question_result(team_id=active_team.id, question=selected_question)
         self.question_service.mark_used(selected_question.id)
 
         self.state.history.append(
             (
                 f"round={round_id}; "
-                f"team={team_id}; "
+                f"team={active_team.id}; "
                 f"question={selected_question.id}; "
                 f"media={selected_question.media_type}; "
                 f"correct={self.state.last_result_correct}"
@@ -213,6 +265,55 @@ class GameService:
             rounds=self.rounds,
             questions=self.questions,
         )
+
+        self._advance_turn()
+        return True
+
+    def run_round(self, round_id: int) -> None:
+        """
+        Run selected round until user stops or questions end.
+        Запустить выбранный раунд, пока пользователь не остановит игру или не закончатся вопросы.
+        """
+        self.state.current_round_id = round_id
+        self._reset_round_queue()
+
+        round_name = self._get_round_name(round_id)
+        print(f"\n=== СТАРТ РАУНДА: {round_name} ===")
+
+        while True:
+            remaining_questions = self.question_service.get_unused_count_by_round(round_id)
+            if remaining_questions <= 0:
+                print("\nВ этом раунде больше нет открытых вопросов.")
+                break
+
+            print("\n==============================")
+            print(format_scoreboard(self.teams))
+            print("==============================")
+            print(f"Раунд: {round_name}")
+            print(f"Осталось вопросов: {remaining_questions}")
+
+            active_team = self._get_active_team()
+            next_team = self._get_next_team()
+
+            if active_team is not None:
+                print(f"Сейчас отвечает: {active_team.name}")
+            if next_team is not None:
+                print(f"Следующая команда: {next_team.name}")
+
+            raw_value = input(
+                "\nНажмите Enter, чтобы крутить колесо, "
+                "или введите q для выхода в меню раундов: "
+            ).strip().lower()
+
+            if raw_value == "q":
+                print("Выход из текущего раунда.")
+                break
+
+            played = self.play_turn(round_id=round_id)
+            if not played:
+                break
+
+        print(f"\n=== РАУНД ЗАВЕРШЕН: {round_name} ===")
 
     def run(self) -> None:
         """
@@ -231,10 +332,4 @@ class GameService:
                 print("Выход из игры.")
                 break
 
-            team_id = self.choose_team()
-            if team_id is None:
-                print("Выход из игры.")
-                break
-
-            input("\nНажмите Enter, чтобы крутить колесо...")
-            self.play_turn(round_id=round_id, team_id=team_id)
+            self.run_round(round_id=round_id)

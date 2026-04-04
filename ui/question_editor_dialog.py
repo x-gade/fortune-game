@@ -20,7 +20,7 @@ class QuestionEditorDialog(QDialog):
     Диалог создания нового вопроса.
     """
 
-    def __init__(self, rounds: list, teams: list, parent=None) -> None:
+    def __init__(self, rounds: list, parent=None) -> None:
         """
         Initialize question editor dialog.
         Инициализация диалога создания вопроса.
@@ -28,16 +28,11 @@ class QuestionEditorDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("Добавить вопрос")
-        self.resize(520, 620)
+        self.resize(520, 600)
 
         self.round_combo = QComboBox()
         for round_item in rounds:
             self.round_combo.addItem(round_item.name, round_item.id)
-
-        self.team_combo = QComboBox()
-        self.team_combo.addItem("Без привязки", None)
-        for team in teams:
-            self.team_combo.addItem(team.name, team.id)
 
         self.question_text = QTextEdit()
         self.answer_text = QTextEdit()
@@ -79,7 +74,6 @@ class QuestionEditorDialog(QDialog):
         """
         form = QFormLayout()
         form.addRow("Раунд:", self.round_combo)
-        form.addRow("Привязка к команде:", self.team_combo)
         form.addRow("Текст вопроса:", self.question_text)
         form.addRow("Ответ:", self.answer_text)
         form.addRow("Таймер (сек):", self.timer_spin)
@@ -138,7 +132,6 @@ class QuestionEditorDialog(QDialog):
         """
         return {
             "round_id": self.round_combo.currentData(),
-            "team_id": self.team_combo.currentData(),
             "text": self.question_text.toPlainText().strip(),
             "answer": self.answer_text.toPlainText().strip(),
             "timer_seconds": self.timer_spin.value(),

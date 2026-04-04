@@ -6,7 +6,7 @@
     {
       "id": 1,
       "name": "Знатоки",
-      "score": 700
+      "score": 0
     },
     {
       "id": 2,
@@ -32,7 +32,7 @@
       "answer": "Париж",
       "timer_seconds": 30,
       "points": 100,
-      "used": true,
+      "used": false,
       "team_id": null,
       "category": "География",
       "difficulty": "easy",
@@ -74,7 +74,7 @@
       "answer": "5",
       "timer_seconds": 30,
       "points": 100,
-      "used": true,
+      "used": false,
       "team_id": 1,
       "category": null,
       "difficulty": null,

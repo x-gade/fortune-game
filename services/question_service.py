@@ -18,32 +18,16 @@ class QuestionService:
         self.questions = questions
         self.default_timer_seconds = default_timer_seconds
 
-    def get_available_questions(
-        self,
-        round_id: int,
-        team_id: Optional[int] = None,
-    ) -> list[Question]:
+    def get_available_questions(self, round_id: int) -> list[Question]:
         """
-        Return available questions for round and optional team.
-        Вернуть доступные вопросы для раунда и, при необходимости, команды.
+        Return available questions for selected round.
+        Вернуть доступные вопросы выбранного раунда.
         """
-        result: list[Question] = []
-
-        for question in self.questions:
-            if question.used:
-                continue
-
-            if question.round_id != round_id:
-                continue
-
-            if question.team_id is None:
-                result.append(question)
-                continue
-
-            if team_id is not None and question.team_id == team_id:
-                result.append(question)
-
-        return result
+        return [
+            question
+            for question in self.questions
+            if not question.used and question.round_id == round_id
+        ]
 
     def get_questions_by_round(self, round_id: Optional[int] = None) -> list[Question]:
         """
@@ -65,19 +49,22 @@ class QuestionService:
                 return question
         return None
 
-    def pick_random_question(
-        self,
-        round_id: int,
-        team_id: Optional[int] = None,
-    ) -> Optional[Question]:
+    def pick_random_question(self, round_id: int) -> Optional[Question]:
         """
-        Pick random available question.
-        Выбрать случайный доступный вопрос.
+        Pick random available question for round.
+        Выбрать случайный доступный вопрос для раунда.
         """
-        available = self.get_available_questions(round_id=round_id, team_id=team_id)
+        available = self.get_available_questions(round_id=round_id)
         if not available:
             return None
         return random.choice(available)
+
+    def get_unused_count_by_round(self, round_id: int) -> int:
+        """
+        Return count of unused questions in round.
+        Вернуть количество неиспользованных вопросов в раунде.
+        """
+        return len(self.get_available_questions(round_id))
 
     def mark_used(self, question_id: int) -> None:
         """

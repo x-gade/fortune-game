@@ -34,16 +34,11 @@ class AdminWindow(QWidget):
         self.controller = controller
 
         self.setWindowTitle("Fortune Game - Admin")
-        self.resize(1280, 860)
+        self.resize(1320, 900)
 
         self.round_combo = QComboBox()
-        self.team_combo = QComboBox()
-
         for round_item in self.controller.game.rounds:
             self.round_combo.addItem(round_item.name, round_item.id)
-
-        for team in self.controller.game.teams:
-            self.team_combo.addItem(team.name, team.id)
 
         self.select_round_button = QPushButton("Применить раунд")
         self.spin_button = QPushButton("Крутить колесо")
@@ -54,6 +49,10 @@ class AdminWindow(QWidget):
         self.timer_start_button = QPushButton("Старт таймера")
         self.timer_pause_button = QPushButton("Пауза таймера")
         self.timer_stop_button = QPushButton("Стоп таймера")
+
+        self.current_team_value = QLabel("Нет активной команды")
+        self.next_team_value = QLabel("Нет следующей команды")
+        self.round_progress_value = QLabel("Раунд не выбран")
 
         self.question_filter_round_combo = QComboBox()
         self.question_filter_round_combo.addItem("Все раунды", None)
@@ -98,9 +97,14 @@ class AdminWindow(QWidget):
         self.controller.timer_started.connect(self.timer_widget.set_running)
         self.controller.timer_stopped.connect(self.timer_widget.set_stopped)
         self.controller.questions_changed.connect(self.refresh_question_list)
+        self.controller.active_team_changed.connect(self.current_team_value.setText)
+        self.controller.next_team_changed.connect(self.next_team_value.setText)
+        self.controller.round_progress_changed.connect(self.round_progress_value.setText)
 
         self.scoreboard.update_scores(self.controller.game.teams)
         self.refresh_question_list()
+        self.current_team_value.setText(self.controller.get_active_team_name())
+        self.next_team_value.setText(self.controller.get_next_team_name())
 
     def _build_layout(self) -> None:
         """
@@ -111,9 +115,15 @@ class AdminWindow(QWidget):
         top_controls.addWidget(QLabel("Раунд:"), 0, 0)
         top_controls.addWidget(self.round_combo, 0, 1)
         top_controls.addWidget(self.select_round_button, 0, 2)
-        top_controls.addWidget(QLabel("Команда:"), 1, 0)
-        top_controls.addWidget(self.team_combo, 1, 1)
-        top_controls.addWidget(self.spin_button, 1, 2)
+        top_controls.addWidget(self.spin_button, 0, 3)
+
+        top_controls.addWidget(QLabel("Сейчас отвечает:"), 1, 0)
+        top_controls.addWidget(self.current_team_value, 1, 1)
+        top_controls.addWidget(QLabel("Следующая команда:"), 1, 2)
+        top_controls.addWidget(self.next_team_value, 1, 3)
+
+        top_controls.addWidget(QLabel("Прогресс раунда:"), 2, 0)
+        top_controls.addWidget(self.round_progress_value, 2, 1, 1, 3)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.repeat_button)
@@ -197,14 +207,12 @@ class AdminWindow(QWidget):
 
     def _spin(self) -> None:
         """
-        Start spin for selected team.
-        Запустить вращение для выбранной команды.
+        Start wheel for current round and current queue team.
+        Запустить колесо для текущего раунда и текущей команды по очереди.
         """
         round_id = self.round_combo.currentData()
         self.controller.select_round(round_id)
-
-        team_id = self.team_combo.currentData()
-        self.controller.spin_for_team(team_id)
+        self.controller.spin_next_question()
 
     def _show_question(self, question: Question) -> None:
         """
@@ -335,7 +343,6 @@ class AdminWindow(QWidget):
         """
         dialog = QuestionEditorDialog(
             rounds=self.controller.game.rounds,
-            teams=self.controller.game.teams,
             parent=self,
         )
 

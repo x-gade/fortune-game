@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 from models.question import Question
+from models.team import Team
 from services.game_service import GameService
 from ui.admin_window import AdminWindow
 from ui.display_window import DisplayWindow
@@ -86,6 +87,9 @@ class GameController(QObject):
     timer_stopped = Signal()
     video_requested = Signal(str)
     questions_changed = Signal()
+    active_team_changed = Signal(str)
+    next_team_changed = Signal(str)
+    round_progress_changed = Signal(str)
 
     def __init__(self, data_path: str) -> None:
         """
@@ -97,13 +101,87 @@ class GameController(QObject):
         self.game = GameService(data_path=data_path)
 
         self.current_question: Question | None = None
+        self.last_question: Question | None = None
         self.current_question_resolved: bool = True
         self.current_team_id: int | None = None
         self.remaining_seconds: int = 0
 
+        self.round_team_order: list[Team] = []
+        self.round_turn_index: int = 0
+
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self._on_timer_tick)
+
+    def _build_round_team_order(self) -> list[Team]:
+        """
+        Build alphabetical team order for active round.
+        Построить алфавитный порядок команд для активного раунда.
+        """
+        return sorted(self.game.teams, key=lambda team: team.name.casefold())
+
+    def _get_active_team(self) -> Team | None:
+        """
+        Return current answering team.
+        Вернуть текущую отвечающую команду.
+        """
+        if not self.round_team_order:
+            return None
+
+        if self.round_turn_index < 0 or self.round_turn_index >= len(self.round_team_order):
+            self.round_turn_index = 0
+
+        return self.round_team_order[self.round_turn_index]
+
+    def _get_next_team(self) -> Team | None:
+        """
+        Return next team in turn order.
+        Вернуть следующую команду в очереди.
+        """
+        if not self.round_team_order:
+            return None
+
+        next_index = (self.round_turn_index + 1) % len(self.round_team_order)
+        return self.round_team_order[next_index]
+
+    def _advance_turn(self) -> None:
+        """
+        Move turn pointer to next team.
+        Сдвинуть указатель хода на следующую команду.
+        """
+        if not self.round_team_order:
+            return
+
+        self.round_turn_index = (self.round_turn_index + 1) % len(self.round_team_order)
+        self._emit_round_runtime_info()
+
+    def _emit_round_runtime_info(self) -> None:
+        """
+        Emit current team, next team and round progress text.
+        Отправить текущую команду, следующую команду и прогресс раунда.
+        """
+        active_team = self._get_active_team()
+        next_team = self._get_next_team()
+
+        self.active_team_changed.emit(
+            active_team.name if active_team is not None else "Нет активной команды"
+        )
+        self.next_team_changed.emit(
+            next_team.name if next_team is not None else "Нет следующей команды"
+        )
+
+        round_id = self.game.state.current_round_id
+        if round_id is None:
+            self.round_progress_changed.emit("Раунд не выбран")
+            return
+
+        unused_count = self.game.question_service.get_unused_count_by_round(round_id)
+        total_count = len(self.game.question_service.get_questions_by_round(round_id))
+        used_count = total_count - unused_count
+
+        self.round_progress_changed.emit(
+            f"Раунд: сыграно {used_count} из {total_count}, осталось {unused_count}"
+        )
 
     def clear_active_question_state(self) -> None:
         """
@@ -127,21 +205,28 @@ class GameController(QObject):
             self.status_changed.emit("Раунд не выбран.")
             return
 
+        self.clear_active_question_state()
+
         self.game.state.current_round_id = round_id
+        self.round_team_order = self._build_round_team_order()
+        self.round_turn_index = 0
 
         round_name = next(
             (round_item.name for round_item in self.game.rounds if round_item.id == round_id),
             f"Раунд {round_id}",
         )
+
         self.round_title_changed.emit(round_name)
         self.status_changed.emit(f"Выбран раунд: {round_name}")
+        self._emit_round_runtime_info()
 
-    def spin_for_team(self, team_id: int) -> None:
+    def spin_next_question(self) -> None:
         """
-        Select question and start wheel animation for team.
-        Выбрать вопрос и запустить анимацию колеса для команды.
+        Select next question for current round and current team in queue.
+        Выбрать следующий вопрос текущего раунда для текущей команды по очереди.
         """
-        if self.game.state.current_round_id is None:
+        round_id = self.game.state.current_round_id
+        if round_id is None:
             self.status_changed.emit("Сначала выбери раунд.")
             return
 
@@ -149,29 +234,31 @@ class GameController(QObject):
             self.status_changed.emit("Сначала заверши текущий вопрос.")
             return
 
-        available_questions = self.game.question_service.get_available_questions(
-            round_id=self.game.state.current_round_id,
-            team_id=team_id,
-        )
+        if not self.round_team_order:
+            self.round_team_order = self._build_round_team_order()
+            self.round_turn_index = 0
 
-        if not available_questions:
-            self.status_changed.emit("Для выбранного раунда нет доступных вопросов.")
+        active_team = self._get_active_team()
+        if active_team is None:
+            self.status_changed.emit("Нет доступных команд.")
             return
 
-        selected_question = self.game.question_service.pick_random_question(
-            round_id=self.game.state.current_round_id,
-            team_id=team_id,
-        )
+        available_questions = self.game.question_service.get_available_questions(round_id=round_id)
+        if not available_questions:
+            self.status_changed.emit("В этом раунде больше нет доступных вопросов.")
+            return
 
+        selected_question = self.game.question_service.pick_random_question(round_id=round_id)
         if selected_question is None:
             self.status_changed.emit("Не удалось выбрать вопрос.")
             return
 
         self.current_question = selected_question
+        self.last_question = selected_question
         self.current_question_resolved = False
-        self.current_team_id = team_id
+        self.current_team_id = active_team.id
 
-        self.game.state.current_team_id = team_id
+        self.game.state.current_team_id = active_team.id
         self.game.state.current_question_id = selected_question.id
 
         labels = self.game.wheel_service.build_wheel_labels(available_questions)
@@ -181,7 +268,8 @@ class GameController(QObject):
         )
 
         self.wheel_spin_requested.emit(labels, target_index)
-        self.status_changed.emit("Колесо вращается...")
+        self.status_changed.emit(f"Колесо вращается. Отвечает команда: {active_team.name}")
+        self._emit_round_runtime_info()
 
     def on_public_wheel_finished(self) -> None:
         """
@@ -192,7 +280,13 @@ class GameController(QObject):
             return
 
         self.question_selected.emit(self.current_question)
-        self.status_changed.emit("Вопрос показан.")
+        self.last_question = self.current_question
+
+        team = self._get_active_team()
+        if team is not None:
+            self.status_changed.emit(f"Вопрос показан. Отвечает команда: {team.name}")
+        else:
+            self.status_changed.emit("Вопрос показан.")
 
         if getattr(self.current_question, "media_type", None) == "video":
             media_path = getattr(self.current_question, "media_path", None)
@@ -215,23 +309,25 @@ class GameController(QObject):
         Repeat current question text.
         Повторно показать текущий вопрос.
         """
-        if self.current_question is None:
+        question = self.current_question or self.last_question
+        if question is None:
             self.status_changed.emit("Нет активного вопроса для повтора.")
             return
 
-        self.question_selected.emit(self.current_question)
+        self.question_selected.emit(question)
         self.status_changed.emit("Вопрос повторен.")
 
     def show_answer(self) -> None:
         """
-        Show answer for current question.
-        Показать ответ на текущий вопрос.
+        Show answer for current or last question.
+        Показать ответ на текущий или последний вопрос.
         """
-        if self.current_question is None:
-            self.status_changed.emit("Нет активного вопроса.")
+        question = self.current_question or self.last_question
+        if question is None:
+            self.status_changed.emit("Нет вопроса для показа ответа.")
             return
 
-        self.answer_requested.emit(self.current_question.answer)
+        self.answer_requested.emit(question.answer)
         self.status_changed.emit("Ответ показан.")
 
     def start_timer(self) -> None:
@@ -280,7 +376,7 @@ class GameController(QObject):
     def mark_correct(self) -> None:
         """
         Mark answer as correct and award points.
-        Отметить ответ как верный и начислить очки.
+        Отметить ответ как верный, показать правильный ответ и начислить очки.
         """
         if self.current_question is None or self.current_team_id is None:
             self.status_changed.emit("Нет активного вопроса или команды.")
@@ -291,6 +387,10 @@ class GameController(QObject):
             return
 
         self.timer.stop()
+
+        self.answer_requested.emit(self.current_question.answer)
+        self.last_question = self.current_question
+
         self.game.score_service.add_points(self.current_team_id, self.current_question.points)
         self.game.state.last_result_correct = True
         self._finalize_current_question("Ответ засчитан.")
@@ -298,7 +398,7 @@ class GameController(QObject):
     def mark_wrong(self) -> None:
         """
         Mark answer as incorrect.
-        Отметить ответ как неверный.
+        Отметить ответ как неверный и все равно показать правильный ответ.
         """
         if self.current_question is None:
             self.status_changed.emit("Нет активного вопроса.")
@@ -309,6 +409,10 @@ class GameController(QObject):
             return
 
         self.timer.stop()
+
+        self.answer_requested.emit(self.current_question.answer)
+        self.last_question = self.current_question
+
         self.game.state.last_result_correct = False
         self._finalize_current_question("Ответ не засчитан.")
 
@@ -320,13 +424,17 @@ class GameController(QObject):
         if self.current_question is None:
             return
 
-        self.game.question_service.mark_used(self.current_question.id)
+        finished_question_id = self.current_question.id
+        finished_round_id = self.game.state.current_round_id
+        finished_team_id = self.current_team_id
+
+        self.game.question_service.mark_used(finished_question_id)
 
         self.game.state.history.append(
             (
-                f"round={self.game.state.current_round_id}; "
-                f"team={self.current_team_id}; "
-                f"question={self.current_question.id}; "
+                f"round={finished_round_id}; "
+                f"team={finished_team_id}; "
+                f"question={finished_question_id}; "
                 f"media={getattr(self.current_question, 'media_type', None)}; "
                 f"correct={self.game.state.last_result_correct}"
             )
@@ -340,12 +448,26 @@ class GameController(QObject):
         )
 
         self.scoreboard_changed.emit(self.game.teams)
+
         self.current_question_resolved = True
+        self.current_question = None
+        self.current_team_id = None
         self.remaining_seconds = 0
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
-        self.status_changed.emit(status_text)
+
+        self._advance_turn()
         self.questions_changed.emit()
+
+        if finished_round_id is not None:
+            if self.game.question_service.get_unused_count_by_round(finished_round_id) == 0:
+                self.status_changed.emit(
+                    f"{status_text} Раунд завершен, вопросы закончились."
+                )
+                self._emit_round_runtime_info()
+                return
+
+        self.status_changed.emit(status_text)
 
     def _on_timer_tick(self) -> None:
         """
@@ -379,6 +501,7 @@ class GameController(QObject):
             questions=self.game.questions,
         )
         self.questions_changed.emit()
+        self._emit_round_runtime_info()
 
     def reset_current_question(self, question_id: int) -> None:
         """
@@ -400,11 +523,12 @@ class GameController(QObject):
         """
         count = self.game.question_service.reset_round_questions(round_id)
 
-        if (
-            self.current_question is not None
-            and self.current_question.round_id == round_id
-        ):
+        if self.current_question is not None and self.current_question.round_id == round_id:
             self.clear_active_question_state()
+
+        if self.game.state.current_round_id == round_id:
+            self.round_team_order = self._build_round_team_order()
+            self.round_turn_index = 0
 
         self.save_questions_state()
         self.status_changed.emit(f"Сброшено вопросов в раунде: {count}")
@@ -416,6 +540,11 @@ class GameController(QObject):
         """
         count = self.game.question_service.reset_all_questions()
         self.clear_active_question_state()
+
+        if self.game.state.current_round_id is not None:
+            self.round_team_order = self._build_round_team_order()
+            self.round_turn_index = 0
+
         self.save_questions_state()
         self.status_changed.emit(f"Сброшено всех вопросов: {count}")
 
@@ -441,7 +570,7 @@ class GameController(QObject):
         question = Question(
             id=get_next_id(self.game.questions),
             round_id=payload["round_id"],
-            team_id=payload["team_id"],
+            team_id=None,
             text=payload["text"],
             answer=payload["answer"],
             timer_seconds=payload["timer_seconds"],
@@ -456,6 +585,26 @@ class GameController(QObject):
         self.game.question_service.add_question(question)
         self.save_questions_state()
         self.status_changed.emit(f"Добавлен вопрос #{question.id}.")
+
+    def get_active_team_name(self) -> str:
+        """
+        Return active team display name.
+        Вернуть имя текущей активной команды.
+        """
+        active_team = self._get_active_team()
+        if active_team is None:
+            return "Нет активной команды"
+        return active_team.name
+
+    def get_next_team_name(self) -> str:
+        """
+        Return next team display name.
+        Вернуть имя следующей команды.
+        """
+        next_team = self._get_next_team()
+        if next_team is None:
+            return "Нет следующей команды"
+        return next_team.name
 
 
 def run_app() -> int:
