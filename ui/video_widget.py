@@ -48,8 +48,25 @@ class VideoWidget(QWidget):
             self.playback_finished.emit()
             return
 
+        self.player.stop()
         self.player.setSource(QUrl.fromLocalFile(str(path.resolve())))
         self.player.play()
+
+    def pause(self) -> None:
+        """
+        Pause current playback.
+        Поставить текущее воспроизведение на паузу.
+        """
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.player.pause()
+
+    def resume(self) -> None:
+        """
+        Resume paused playback.
+        Продолжить воспроизведение после паузы.
+        """
+        if self.player.playbackState() == QMediaPlayer.PausedState:
+            self.player.play()
 
     def stop(self) -> None:
         """

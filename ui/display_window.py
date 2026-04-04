@@ -146,12 +146,28 @@ class DisplayWindow(QWidget):
             self.status_label.setText("Путь к видео не указан.")
             return
 
+        self.video_widget.stop()
+
         if mode == "answer":
             self.answer_label.clear()
 
         self.wheel.hide()
         self.video_widget.show()
         self.video_widget.play_file(file_path)
+
+    def pause_video(self) -> None:
+        """
+        Pause current public video.
+        Поставить текущее публичное видео на паузу.
+        """
+        self.video_widget.pause()
+
+    def resume_video(self) -> None:
+        """
+        Resume current public video.
+        Продолжить текущее публичное видео.
+        """
+        self.video_widget.resume()
 
     def stop_video(self) -> None:
         """

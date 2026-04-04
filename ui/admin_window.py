@@ -46,8 +46,11 @@ class AdminWindow(QWidget):
         self.show_answer_button = QPushButton("Показать ответ")
         self.correct_button = QPushButton("Верный ответ")
         self.wrong_button = QPushButton("Неверный ответ")
+        self.video_pause_resume_button = QPushButton("Пауза видео")
+        self.video_pause_resume_button.hide()
+
         self.timer_start_button = QPushButton("Старт таймера")
-        self.timer_pause_button = QPushButton("Пауза таймера")
+        self.timer_pause_resume_button = QPushButton("Пауза таймера")
         self.timer_stop_button = QPushButton("Стоп таймера")
 
         self.current_team_value = QLabel("Нет активной команды")
@@ -93,18 +96,22 @@ class AdminWindow(QWidget):
         self.controller.answer_requested.connect(self._show_answer)
         self.controller.wheel_spin_requested.connect(self.wheel.start_spin)
         self.controller.timer_updated.connect(self.timer_widget.set_seconds)
-        self.controller.timer_paused.connect(self.timer_widget.set_paused)
-        self.controller.timer_started.connect(self.timer_widget.set_running)
-        self.controller.timer_stopped.connect(self.timer_widget.set_stopped)
+        self.controller.timer_paused.connect(self._on_timer_paused)
+        self.controller.timer_started.connect(self._on_timer_started)
+        self.controller.timer_stopped.connect(self._on_timer_stopped)
         self.controller.questions_changed.connect(self.refresh_question_list)
         self.controller.active_team_changed.connect(self.current_team_value.setText)
         self.controller.next_team_changed.connect(self.next_team_value.setText)
         self.controller.round_progress_changed.connect(self.round_progress_value.setText)
 
+        self.controller.video_state_changed.connect(self._update_video_button_state)
+
         self.scoreboard.update_scores(self.controller.game.teams)
         self.refresh_question_list()
         self.current_team_value.setText(self.controller.get_active_team_name())
         self.next_team_value.setText(self.controller.get_next_team_name())
+        self._update_video_button_state()
+        self._on_timer_stopped()
 
     def _build_layout(self) -> None:
         """
@@ -131,9 +138,12 @@ class AdminWindow(QWidget):
         button_row.addWidget(self.correct_button)
         button_row.addWidget(self.wrong_button)
 
+        video_row = QHBoxLayout()
+        video_row.addWidget(self.video_pause_resume_button, 1)
+
         timer_row = QHBoxLayout()
         timer_row.addWidget(self.timer_start_button)
-        timer_row.addWidget(self.timer_pause_button)
+        timer_row.addWidget(self.timer_pause_resume_button)
         timer_row.addWidget(self.timer_stop_button)
 
         questions_manage_grid = QGridLayout()
@@ -157,6 +167,7 @@ class AdminWindow(QWidget):
         left_layout.addLayout(top_controls)
         left_layout.addWidget(self.wheel, 4)
         left_layout.addLayout(button_row)
+        left_layout.addLayout(video_row)
         left_layout.addLayout(timer_row)
         left_layout.addWidget(self.timer_widget)
         left_layout.addWidget(QLabel("Управление вопросами:"))
@@ -184,8 +195,10 @@ class AdminWindow(QWidget):
         self.show_answer_button.clicked.connect(self.controller.show_answer)
         self.correct_button.clicked.connect(self.controller.mark_correct)
         self.wrong_button.clicked.connect(self.controller.mark_wrong)
+        self.video_pause_resume_button.clicked.connect(self.controller.toggle_video_pause_resume)
+
         self.timer_start_button.clicked.connect(self.controller.start_timer)
-        self.timer_pause_button.clicked.connect(self.controller.pause_timer)
+        self.timer_pause_resume_button.clicked.connect(self._toggle_timer_pause_resume)
         self.timer_stop_button.clicked.connect(self.controller.stop_timer)
 
         self.refresh_questions_button.clicked.connect(self.refresh_question_list)
@@ -244,6 +257,60 @@ class AdminWindow(QWidget):
         Обновить локальный виджет счета.
         """
         self.scoreboard.update_scores(teams)
+
+    def _update_video_button_state(self) -> None:
+        """
+        Update video pause/resume button visibility and text.
+        Обновить видимость и текст кнопки паузы/продолжения видео.
+        """
+        if not self.controller.is_video_question_context():
+            self.video_pause_resume_button.hide()
+            return
+
+        if not self.controller.is_video_visible_now():
+            self.video_pause_resume_button.hide()
+            return
+
+        self.video_pause_resume_button.show()
+
+        if self.controller.is_video_paused():
+            self.video_pause_resume_button.setText("Продолжить видео")
+        else:
+            self.video_pause_resume_button.setText("Пауза видео")
+
+    def _toggle_timer_pause_resume(self) -> None:
+        """
+        Toggle timer pause or resume from one button.
+        Переключить паузу или продолжение таймера одной кнопкой.
+        """
+        if self.timer_pause_resume_button.text() == "Продолжить таймер":
+            self.controller.start_timer()
+        else:
+            self.controller.pause_timer()
+
+    def _on_timer_started(self) -> None:
+        """
+        Update timer buttons when timer starts or resumes.
+        Обновить кнопки таймера при запуске или продолжении.
+        """
+        self.timer_widget.set_running()
+        self.timer_pause_resume_button.setText("Пауза таймера")
+
+    def _on_timer_paused(self) -> None:
+        """
+        Update timer buttons when timer is paused.
+        Обновить кнопки таймера при паузе.
+        """
+        self.timer_widget.set_paused()
+        self.timer_pause_resume_button.setText("Продолжить таймер")
+
+    def _on_timer_stopped(self) -> None:
+        """
+        Update timer buttons when timer is stopped.
+        Обновить кнопки таймера при остановке.
+        """
+        self.timer_widget.set_stopped()
+        self.timer_pause_resume_button.setText("Пауза таймера")
 
     def refresh_question_list(self) -> None:
         """

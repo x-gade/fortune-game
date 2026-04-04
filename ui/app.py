@@ -89,6 +89,7 @@ class GameController(QObject):
     active_team_changed = Signal(str)
     next_team_changed = Signal(str)
     round_progress_changed = Signal(str)
+    video_state_changed = Signal()
 
     QUESTION_VIDEO_NAME = "video_secret.mp4"
     ANSWER_VIDEO_NAME = "video_response.mp4"
@@ -123,6 +124,17 @@ class GameController(QObject):
 
         self.wheel_sound_path = Path("assets") / "wolf.mp3"
         self.active_video_mode: str | None = None
+        self.answer_already_revealed: bool = False
+
+        self.display_window = None
+
+    def bind_display_window(self, display_window) -> None:
+        """
+        Bind public display window to controller.
+        Привязать публичное окно отображения к контроллеру.
+        """
+        self.display_window = display_window
+        self.video_state_changed.emit()
 
     def _build_round_team_order(self) -> list[Team]:
         """
@@ -270,6 +282,44 @@ class GameController(QObject):
 
         return None
 
+    def _play_question_video(self, question: Question | None) -> bool:
+        """
+        Play question video if available.
+        Проиграть видео вопроса, если оно доступно.
+        """
+        question_video_path = self._get_question_video_path(question)
+        if question_video_path is None:
+            return False
+
+        self.active_video_mode = "question"
+        self.video_requested.emit(
+            {
+                "path": str(question_video_path),
+                "mode": "question",
+            }
+        )
+        self.video_state_changed.emit()
+        return True
+
+    def _play_answer_video(self, question: Question | None) -> bool:
+        """
+        Play answer video if available.
+        Проиграть видео ответа, если оно доступно.
+        """
+        answer_video_path = self._get_answer_video_path(question)
+        if answer_video_path is None:
+            return False
+
+        self.active_video_mode = "answer"
+        self.video_requested.emit(
+            {
+                "path": str(answer_video_path),
+                "mode": "answer",
+            }
+        )
+        self.video_state_changed.emit()
+        return True
+
     def _reveal_answer(self, question: Question | None) -> None:
         """
         Reveal answer as text or response video depending on question media.
@@ -280,31 +330,25 @@ class GameController(QObject):
             return
 
         self.last_question = question
+        self.answer_already_revealed = True
 
         answer_text = (question.answer or "").strip()
-        answer_video_path = self._get_answer_video_path(question)
-
         if answer_text:
             self.answer_requested.emit(answer_text)
 
-        if answer_video_path is not None:
-            self.active_video_mode = "answer"
-            self.video_requested.emit(
-                {
-                    "path": str(answer_video_path),
-                    "mode": "answer",
-                }
-            )
+        if self._play_answer_video(question):
             self.status_changed.emit("Запущен видеоответ.")
             return
 
         if answer_text:
             self.public_answer_requested.emit(answer_text)
             self.status_changed.emit("Ответ показан.")
+            self.video_state_changed.emit()
             return
 
         self.public_answer_requested.emit("Ответ не указан.")
         self.status_changed.emit("Видеоответ отсутствует, текст ответа не задан.")
+        self.video_state_changed.emit()
 
     def clear_active_question_state(self) -> None:
         """
@@ -313,13 +357,19 @@ class GameController(QObject):
         """
         self.timer.stop()
         self._stop_wheel_sound()
+
+        if self.display_window is not None:
+            self.display_window.stop_video()
+
         self.current_question = None
         self.current_question_resolved = True
         self.current_team_id = None
         self.remaining_seconds = 0
         self.active_video_mode = None
+        self.answer_already_revealed = False
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
+        self.video_state_changed.emit()
 
     def select_round(self, round_id: int) -> None:
         """
@@ -383,6 +433,8 @@ class GameController(QObject):
         self.current_question_resolved = False
         self.current_team_id = active_team.id
         self.active_video_mode = None
+        self.answer_already_revealed = False
+        self.remaining_seconds = 0
 
         self.game.state.current_team_id = active_team.id
         self.game.state.current_question_id = selected_question.id
@@ -397,6 +449,7 @@ class GameController(QObject):
         self.wheel_spin_requested.emit(labels, target_index)
         self.status_changed.emit(f"Колесо вращается. Отвечает команда: {active_team.name}")
         self._emit_round_runtime_info()
+        self.video_state_changed.emit()
 
     def on_public_wheel_finished(self) -> None:
         """
@@ -417,21 +470,16 @@ class GameController(QObject):
         else:
             self.status_changed.emit("Вопрос показан.")
 
-        question_video_path = self._get_question_video_path(self.current_question)
         if self.current_question.media_type == "video":
-            if question_video_path is not None:
-                self.active_video_mode = "question"
-                self.video_requested.emit(
-                    {
-                        "path": str(question_video_path),
-                        "mode": "question",
-                    }
-                )
+            if self._play_question_video(self.current_question):
                 self.status_changed.emit("Запущен видеовопрос.")
             else:
                 self.status_changed.emit(
                     "У видеовопроса не найден файл video_secret.mp4."
                 )
+                self.video_state_changed.emit()
+        else:
+            self.video_state_changed.emit()
 
     def on_video_finished(self) -> None:
         """
@@ -440,6 +488,7 @@ class GameController(QObject):
         """
         finished_mode = self.active_video_mode
         self.active_video_mode = None
+        self.video_state_changed.emit()
 
         if finished_mode == "question":
             self.status_changed.emit("Видео вопроса завершено. Таймер запускается автоматически.")
@@ -454,8 +503,8 @@ class GameController(QObject):
 
     def repeat_question(self) -> None:
         """
-        Repeat current question text.
-        Повторно показать текущий вопрос.
+        Repeat current question text or replay question video.
+        Повторно показать текущий вопрос или заново проиграть видео вопроса.
         """
         question = self.current_question or self.last_question
         if question is None:
@@ -463,7 +512,15 @@ class GameController(QObject):
             return
 
         self.question_selected.emit(question)
+
+        if question.media_type == "video":
+            self.pause_timer()
+            if self._play_question_video(question):
+                self.status_changed.emit("Видеовопрос запущен повторно.")
+                return
+
         self.status_changed.emit("Вопрос повторен.")
+        self.video_state_changed.emit()
 
     def show_answer(self) -> None:
         """
@@ -516,10 +573,64 @@ class GameController(QObject):
         self.timer_stopped.emit()
         self.status_changed.emit("Таймер остановлен.")
 
+    def is_video_question_context(self) -> bool:
+        """
+        Check whether current context is a video question.
+        Проверить, относится ли текущий контекст к видеовопросу.
+        """
+        question = self.current_question or self.last_question
+        if question is None:
+            return False
+        return question.media_type == "video"
+
+    def is_video_visible_now(self) -> bool:
+        """
+        Check whether video is currently visible on display window.
+        Проверить, показывается ли сейчас видео в публичном окне.
+        """
+        if self.display_window is None:
+            return False
+        return self.display_window.video_widget.isVisible()
+
+    def is_video_paused(self) -> bool:
+        """
+        Check whether current public video is paused.
+        Проверить, находится ли текущее публичное видео на паузе.
+        """
+        if self.display_window is None:
+            return False
+        return self.display_window.video_widget.player.playbackState() == QMediaPlayer.PausedState
+
+    def toggle_video_pause_resume(self) -> None:
+        """
+        Toggle pause/resume for current public video.
+        Переключить паузу/продолжение текущего публичного видео.
+        """
+        if not self.is_video_question_context():
+            self.status_changed.emit("Текущий вопрос не является видеовопросом.")
+            self.video_state_changed.emit()
+            return
+
+        if self.display_window is None or not self.is_video_visible_now():
+            self.status_changed.emit("Сейчас видео не воспроизводится.")
+            self.video_state_changed.emit()
+            return
+
+        if self.is_video_paused():
+            self.display_window.resume_video()
+            self.status_changed.emit("Видео продолжено.")
+        else:
+            self.display_window.pause_video()
+            self.status_changed.emit("Видео поставлено на паузу.")
+
+        self.video_state_changed.emit()
+
     def mark_correct(self) -> None:
         """
-        Mark answer as correct, reveal answer and award points.
-        Отметить ответ как верный, показать ответ и начислить очки.
+        Mark answer as correct and award points.
+        If answer was not shown before, reveal it once.
+        Отметить ответ как верный и начислить очки.
+        Если ответ еще не показывался, показать его один раз.
         """
         if self.current_question is None or self.current_team_id is None:
             self.status_changed.emit("Нет активного вопроса или команды.")
@@ -530,7 +641,10 @@ class GameController(QObject):
             return
 
         self.timer.stop()
-        self._reveal_answer(self.current_question)
+        self.timer_stopped.emit()
+
+        if not self.answer_already_revealed:
+            self._reveal_answer(self.current_question)
 
         self.game.score_service.add_points(self.current_team_id, self.current_question.points)
         self.game.state.last_result_correct = True
@@ -538,8 +652,10 @@ class GameController(QObject):
 
     def mark_wrong(self) -> None:
         """
-        Mark answer as incorrect and reveal answer.
-        Отметить ответ как неверный и показать ответ.
+        Mark answer as incorrect.
+        If answer was not shown before, reveal it once.
+        Отметить ответ как неверный.
+        Если ответ еще не показывался, показать его один раз.
         """
         if self.current_question is None:
             self.status_changed.emit("Нет активного вопроса.")
@@ -550,7 +666,10 @@ class GameController(QObject):
             return
 
         self.timer.stop()
-        self._reveal_answer(self.current_question)
+        self.timer_stopped.emit()
+
+        if not self.answer_already_revealed:
+            self._reveal_answer(self.current_question)
 
         self.game.state.last_result_correct = False
         self._finalize_current_question("Ответ не засчитан.")
@@ -592,8 +711,10 @@ class GameController(QObject):
         self.current_question = None
         self.current_team_id = None
         self.remaining_seconds = 0
+        self.active_video_mode = None
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
+        self.video_state_changed.emit()
 
         self._advance_turn()
         self.questions_changed.emit()
@@ -757,6 +878,8 @@ def run_app() -> int:
     controller = GameController(data_path="data/game_data.json")
     admin_window = AdminWindow(controller=controller)
     display_window = DisplayWindow()
+
+    controller.bind_display_window(display_window)
 
     controller.scoreboard_changed.connect(display_window.update_scores)
     controller.round_title_changed.connect(display_window.set_round_title)
