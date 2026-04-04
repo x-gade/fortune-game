@@ -5,6 +5,7 @@ from models.question import Question
 from services.game_service import GameService
 from ui.admin_window import AdminWindow
 from ui.display_window import DisplayWindow
+from utils.helpers import get_next_id
 
 
 APP_STYLESHEET = """
@@ -84,6 +85,7 @@ class GameController(QObject):
     timer_paused = Signal()
     timer_stopped = Signal()
     video_requested = Signal(str)
+    questions_changed = Signal()
 
     def __init__(self, data_path: str) -> None:
         """
@@ -102,6 +104,19 @@ class GameController(QObject):
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self._on_timer_tick)
+
+    def clear_active_question_state(self) -> None:
+        """
+        Clear active runtime state of current question.
+        Очистить runtime-состояние активного текущего вопроса.
+        """
+        self.timer.stop()
+        self.current_question = None
+        self.current_question_resolved = True
+        self.current_team_id = None
+        self.remaining_seconds = 0
+        self.timer_updated.emit(0)
+        self.timer_stopped.emit()
 
     def select_round(self, round_id: int) -> None:
         """
@@ -330,6 +345,7 @@ class GameController(QObject):
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
         self.status_changed.emit(status_text)
+        self.questions_changed.emit()
 
     def _on_timer_tick(self) -> None:
         """
@@ -343,6 +359,103 @@ class GameController(QObject):
             self.timer.stop()
             self.timer_stopped.emit()
             self.status_changed.emit("Время вышло.")
+
+    def get_questions_for_round(self, round_id: int | None = None) -> list[Question]:
+        """
+        Return questions for admin list.
+        Вернуть вопросы для списка администратора.
+        """
+        return self.game.question_service.get_questions_by_round(round_id)
+
+    def save_questions_state(self) -> None:
+        """
+        Persist current questions and related state.
+        Сохранить текущее состояние вопросов и связанных данных.
+        """
+        self.game.data_loader.save_all(
+            settings=self.game.settings,
+            teams=self.game.teams,
+            rounds=self.game.rounds,
+            questions=self.game.questions,
+        )
+        self.questions_changed.emit()
+
+    def reset_current_question(self, question_id: int) -> None:
+        """
+        Reset selected question to unused state.
+        Сбросить выбранный вопрос в состояние неиспользованного.
+        """
+        self.game.question_service.reset_question(question_id)
+
+        if self.current_question is not None and self.current_question.id == question_id:
+            self.clear_active_question_state()
+
+        self.save_questions_state()
+        self.status_changed.emit(f"Вопрос #{question_id} сброшен.")
+
+    def reset_round_questions(self, round_id: int) -> None:
+        """
+        Reset all questions in selected round.
+        Сбросить все вопросы выбранного раунда.
+        """
+        count = self.game.question_service.reset_round_questions(round_id)
+
+        if (
+            self.current_question is not None
+            and self.current_question.round_id == round_id
+        ):
+            self.clear_active_question_state()
+
+        self.save_questions_state()
+        self.status_changed.emit(f"Сброшено вопросов в раунде: {count}")
+
+    def reset_all_questions(self) -> None:
+        """
+        Reset all questions in game.
+        Сбросить все вопросы игры.
+        """
+        count = self.game.question_service.reset_all_questions()
+        self.clear_active_question_state()
+        self.save_questions_state()
+        self.status_changed.emit(f"Сброшено всех вопросов: {count}")
+
+    def set_question_used(self, question_id: int, used: bool) -> None:
+        """
+        Manually set used flag for selected question.
+        Вручную установить флаг used для выбранного вопроса.
+        """
+        self.game.question_service.set_used(question_id, used)
+
+        if self.current_question is not None and self.current_question.id == question_id and not used:
+            self.clear_active_question_state()
+
+        self.save_questions_state()
+        state_text = "закрыт" if used else "открыт"
+        self.status_changed.emit(f"Вопрос #{question_id} теперь {state_text}.")
+
+    def add_question(self, payload: dict) -> None:
+        """
+        Create and store new question from dialog payload.
+        Создать и сохранить новый вопрос из payload диалога.
+        """
+        question = Question(
+            id=get_next_id(self.game.questions),
+            round_id=payload["round_id"],
+            team_id=payload["team_id"],
+            text=payload["text"],
+            answer=payload["answer"],
+            timer_seconds=payload["timer_seconds"],
+            points=payload["points"],
+            used=payload["used"],
+            category=payload["category"],
+            difficulty=payload["difficulty"],
+            media_type=payload["media_type"],
+            media_path=payload["media_path"],
+        )
+
+        self.game.question_service.add_question(question)
+        self.save_questions_state()
+        self.status_changed.emit(f"Добавлен вопрос #{question.id}.")
 
 
 def run_app() -> int:

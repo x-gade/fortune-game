@@ -6,7 +6,7 @@
     {
       "id": 1,
       "name": "Знатоки",
-      "score": 300
+      "score": 700
     },
     {
       "id": 2,
@@ -32,7 +32,7 @@
       "answer": "Париж",
       "timer_seconds": 30,
       "points": 100,
-      "used": false,
+      "used": true,
       "team_id": null,
       "category": "География",
       "difficulty": "easy",
@@ -66,6 +66,20 @@
       "difficulty": "hard",
       "media_type": "video",
       "media_path": "data/media/video_secret_1.mp4"
+    },
+    {
+      "id": 4,
+      "round_id": 1,
+      "text": "Сколько пальцев на руке?",
+      "answer": "5",
+      "timer_seconds": 30,
+      "points": 100,
+      "used": true,
+      "team_id": 1,
+      "category": null,
+      "difficulty": null,
+      "media_type": null,
+      "media_path": null
     }
   ]
 }
