@@ -1,15 +1,15 @@
 import math
 import random
 
-from PySide6.QtCore import QEasingCurve, Property, QPropertyAnimation, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 
 class WheelWidget(QWidget):
     """
-    Visual wheel widget with simple spin animation.
-    Визуальный виджет колеса с простой анимацией вращения.
+    Visual wheel widget with smooth continuous spin curve.
+    Визуальный виджет колеса с плавной непрерывной кривой вращения.
     """
 
     spin_finished = Signal()
@@ -25,29 +25,25 @@ class WheelWidget(QWidget):
         self.labels: list[str] = []
         self.target_index: int | None = None
 
-        self.animation = QPropertyAnimation(self, b"rotation")
-        self.animation.setDuration(4200)
-        self.animation.setEasingCurve(QEasingCurve.OutCubic)
-        self.animation.finished.connect(self.spin_finished.emit)
+        self.total_duration_ms = 44000
+        self.frame_interval_ms = 16
+
+        self.spin_timer = QTimer(self)
+        self.spin_timer.setTimerType(Qt.PreciseTimer)
+        self.spin_timer.setInterval(self.frame_interval_ms)
+        self.spin_timer.timeout.connect(self._on_spin_tick)
+
+        self.elapsed_timer = QElapsedTimer()
+
+        self._spin_active = False
+        self._start_rotation = 0.0
+        self._final_rotation = 0.0
+        self._total_delta = 0.0
+
+        self._curve_samples: list[float] = []
+        self._curve_resolution = 4000
 
         self.setMinimumSize(420, 420)
-
-    def get_rotation(self) -> float:
-        """
-        Return current rotation angle.
-        Вернуть текущий угол вращения.
-        """
-        return self._rotation
-
-    def set_rotation(self, value: float) -> None:
-        """
-        Set current rotation angle.
-        Установить текущий угол вращения.
-        """
-        self._rotation = value
-        self.update()
-
-    rotation = Property(float, get_rotation, set_rotation)
 
     def start_spin(self, labels: list[str], target_index: int) -> None:
         """
@@ -71,15 +67,110 @@ class WheelWidget(QWidget):
         while needed_delta < 0:
             needed_delta += 360.0
 
-        full_turns = random.randint(4, 7)
+        full_turns = random.randint(54, 72)
 
-        start_value = self._rotation % 360.0
-        end_value = self._rotation + full_turns * 360.0 + needed_delta
+        self._start_rotation = self._rotation
+        self._final_rotation = self._rotation + full_turns * 360.0 + needed_delta
+        self._total_delta = self._final_rotation - self._start_rotation
 
-        self.animation.stop()
-        self.animation.setStartValue(start_value)
-        self.animation.setEndValue(end_value)
-        self.animation.start()
+        self._build_motion_curve()
+
+        self._spin_active = True
+        self.spin_timer.stop()
+        self.elapsed_timer.restart()
+        self.spin_timer.start()
+        self.update()
+
+    def _build_motion_curve(self) -> None:
+        """
+        Build normalized cumulative motion curve.
+        Построить нормализованную накопленную кривую движения.
+        """
+        resolution = self._curve_resolution
+        cumulative = [0.0]
+        total_area = 0.0
+
+        for index in range(1, resolution + 1):
+            progress = index / resolution
+            speed = self._speed_profile(progress)
+            total_area += speed
+            cumulative.append(total_area)
+
+        if total_area <= 0:
+            self._curve_samples = [i / resolution for i in range(resolution + 1)]
+            return
+
+        self._curve_samples = [value / total_area for value in cumulative]
+
+    @staticmethod
+    def _speed_profile(progress: float) -> float:
+        """
+        Continuous speed profile:
+        quick spin-up at start, then long smooth decay.
+        Непрерывный профиль скорости:
+        быстрый разгон в начале, затем длительное плавное затухание.
+        """
+        progress = max(0.0, min(1.0, progress))
+
+        # Быстрый старт из почти нулевой скорости.
+        ramp_up = 1.0 - math.exp(-18.0 * progress)
+
+        # Плавное постепенное затухание на всей длине анимации.
+        decay = pow(1.0 - progress, 1.35)
+
+        speed = ramp_up * decay
+
+        # Под конец прижимаем скорость сильнее, чтобы остановка была мягкой.
+        final_soft_stop = pow(1.0 - progress, 0.9)
+
+        return max(speed * final_soft_stop, 0.0)
+
+    def _normalized_motion(self, progress: float) -> float:
+        """
+        Return normalized cumulative displacement for progress.
+        Вернуть нормализованное накопленное смещение для прогресса.
+        """
+        progress = max(0.0, min(1.0, progress))
+
+        if not self._curve_samples:
+            return progress
+
+        scaled_index = progress * self._curve_resolution
+        left_index = int(math.floor(scaled_index))
+        right_index = min(left_index + 1, self._curve_resolution)
+
+        if left_index >= self._curve_resolution:
+            return 1.0
+
+        local_t = scaled_index - left_index
+        left_value = self._curve_samples[left_index]
+        right_value = self._curve_samples[right_index]
+
+        return left_value + (right_value - left_value) * local_t
+
+    def _on_spin_tick(self) -> None:
+        """
+        Update wheel rotation frame by frame.
+        Обновить вращение колеса покадрово.
+        """
+        if not self._spin_active:
+            return
+
+        elapsed_ms = self.elapsed_timer.elapsed()
+
+        if elapsed_ms >= self.total_duration_ms:
+            self._rotation = self._final_rotation
+            self._spin_active = False
+            self.spin_timer.stop()
+            self.update()
+            self.spin_finished.emit()
+            return
+
+        progress = elapsed_ms / self.total_duration_ms
+        normalized_displacement = self._normalized_motion(progress)
+
+        self._rotation = self._start_rotation + self._total_delta * normalized_displacement
+        self.update()
 
     def paintEvent(self, event) -> None:
         """

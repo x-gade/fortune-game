@@ -1,4 +1,7 @@
-from PySide6.QtCore import QObject, QTimer, Signal
+from pathlib import Path
+
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QApplication
 
 from models.question import Question
@@ -113,6 +116,14 @@ class GameController(QObject):
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self._on_timer_tick)
 
+        self.wheel_audio_output = QAudioOutput(self)
+        self.wheel_audio_output.setVolume(0.65)
+
+        self.wheel_player = QMediaPlayer(self)
+        self.wheel_player.setAudioOutput(self.wheel_audio_output)
+
+        self.wheel_sound_path = Path("assets") / "wolf.mp3"
+
     def _build_round_team_order(self) -> list[Team]:
         """
         Build alphabetical team order for active round.
@@ -183,12 +194,39 @@ class GameController(QObject):
             f"Раунд: сыграно {used_count} из {total_count}, осталось {unused_count}"
         )
 
+    def _start_wheel_sound(self) -> None:
+        """
+        Start wheel sound while spinning.
+        Запустить звук волчка во время вращения.
+        """
+        if not self.wheel_sound_path.exists():
+            self.status_changed.emit(
+                f"Файл звука не найден: {self.wheel_sound_path.as_posix()}"
+            )
+            return
+
+        source_url = QUrl.fromLocalFile(str(self.wheel_sound_path.resolve()))
+
+        if self.wheel_player.source() != source_url:
+            self.wheel_player.setSource(source_url)
+
+        self.wheel_player.stop()
+        self.wheel_player.play()
+
+    def _stop_wheel_sound(self) -> None:
+        """
+        Stop wheel sound after spin is finished.
+        Остановить звук волчка после завершения вращения.
+        """
+        self.wheel_player.stop()
+
     def clear_active_question_state(self) -> None:
         """
         Clear active runtime state of current question.
         Очистить runtime-состояние активного текущего вопроса.
         """
         self.timer.stop()
+        self._stop_wheel_sound()
         self.current_question = None
         self.current_question_resolved = True
         self.current_team_id = None
@@ -267,6 +305,7 @@ class GameController(QObject):
             target_question_id=selected_question.id,
         )
 
+        self._start_wheel_sound()
         self.wheel_spin_requested.emit(labels, target_index)
         self.status_changed.emit(f"Колесо вращается. Отвечает команда: {active_team.name}")
         self._emit_round_runtime_info()
@@ -276,6 +315,8 @@ class GameController(QObject):
         Reveal selected question after public wheel animation.
         Показать выбранный вопрос после завершения публичной анимации колеса.
         """
+        self._stop_wheel_sound()
+
         if self.current_question is None:
             return
 
