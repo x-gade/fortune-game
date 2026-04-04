@@ -18,10 +18,12 @@ class TimerWidget(QWidget):
 
         self.title_label = QLabel("Таймер")
         self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setFont(QFont("Arial", 20, QFont.Bold))
 
         self.value_label = QLabel("00:00")
         self.value_label.setAlignment(Qt.AlignCenter)
-        self.value_label.setFont(QFont("Arial", 28, QFont.Bold))
+        self.value_label.setFont(QFont("Arial", 56, QFont.Bold))
+        self.value_label.setStyleSheet("color: #FFD166;")
 
         layout = QVBoxLayout()
         layout.addWidget(self.title_label)

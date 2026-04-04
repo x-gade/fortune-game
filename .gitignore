@@ -12,7 +12,9 @@ venv/
 .venv/
 env/
 ENV/
+data/media/
 
+data/game_data.json
 # IDE / Editor
 .idea/
 .vscode/

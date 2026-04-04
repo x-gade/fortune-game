@@ -59,11 +59,6 @@ QTextEdit {
     border: 1px solid #666666;
 }
 
-QScrollBar:vertical,
-QScrollBar:horizontal {
-    background: #3a3a3a;
-}
-
 QToolTip {
     background-color: #505050;
     color: #ffffff;
@@ -81,6 +76,7 @@ class GameController(QObject):
     wheel_spin_requested = Signal(list, int)
     question_selected = Signal(object)
     answer_requested = Signal(str)
+    public_answer_requested = Signal(str)
     scoreboard_changed = Signal(object)
     round_title_changed = Signal(str)
     status_changed = Signal(str)
@@ -88,11 +84,14 @@ class GameController(QObject):
     timer_started = Signal()
     timer_paused = Signal()
     timer_stopped = Signal()
-    video_requested = Signal(str)
+    video_requested = Signal(dict)
     questions_changed = Signal()
     active_team_changed = Signal(str)
     next_team_changed = Signal(str)
     round_progress_changed = Signal(str)
+
+    QUESTION_VIDEO_NAME = "video_secret.mp4"
+    ANSWER_VIDEO_NAME = "video_response.mp4"
 
     def __init__(self, data_path: str) -> None:
         """
@@ -123,6 +122,7 @@ class GameController(QObject):
         self.wheel_player.setAudioOutput(self.wheel_audio_output)
 
         self.wheel_sound_path = Path("assets") / "wolf.mp3"
+        self.active_video_mode: str | None = None
 
     def _build_round_team_order(self) -> list[Team]:
         """
@@ -220,6 +220,92 @@ class GameController(QObject):
         """
         self.wheel_player.stop()
 
+    def _get_media_dir(self, question: Question | None) -> Path | None:
+        """
+        Return media directory for question.
+        Вернуть папку медиа для вопроса.
+        """
+        if question is None:
+            return None
+
+        if question.media_type != "video":
+            return None
+
+        if not question.media_path:
+            return None
+
+        media_dir = Path(question.media_path)
+        if not media_dir.exists() or not media_dir.is_dir():
+            return None
+
+        return media_dir
+
+    def _get_question_video_path(self, question: Question | None) -> Path | None:
+        """
+        Return path to question video if exists.
+        Вернуть путь к видео вопроса, если оно существует.
+        """
+        media_dir = self._get_media_dir(question)
+        if media_dir is None:
+            return None
+
+        video_path = media_dir / self.QUESTION_VIDEO_NAME
+        if video_path.exists():
+            return video_path
+
+        return None
+
+    def _get_answer_video_path(self, question: Question | None) -> Path | None:
+        """
+        Return path to answer video if exists.
+        Вернуть путь к видео ответа, если оно существует.
+        """
+        media_dir = self._get_media_dir(question)
+        if media_dir is None:
+            return None
+
+        video_path = media_dir / self.ANSWER_VIDEO_NAME
+        if video_path.exists():
+            return video_path
+
+        return None
+
+    def _reveal_answer(self, question: Question | None) -> None:
+        """
+        Reveal answer as text or response video depending on question media.
+        Показать ответ текстом или через видеоответ в зависимости от медиа вопроса.
+        """
+        if question is None:
+            self.status_changed.emit("Нет вопроса для показа ответа.")
+            return
+
+        self.last_question = question
+
+        answer_text = (question.answer or "").strip()
+        answer_video_path = self._get_answer_video_path(question)
+
+        if answer_text:
+            self.answer_requested.emit(answer_text)
+
+        if answer_video_path is not None:
+            self.active_video_mode = "answer"
+            self.video_requested.emit(
+                {
+                    "path": str(answer_video_path),
+                    "mode": "answer",
+                }
+            )
+            self.status_changed.emit("Запущен видеоответ.")
+            return
+
+        if answer_text:
+            self.public_answer_requested.emit(answer_text)
+            self.status_changed.emit("Ответ показан.")
+            return
+
+        self.public_answer_requested.emit("Ответ не указан.")
+        self.status_changed.emit("Видеоответ отсутствует, текст ответа не задан.")
+
     def clear_active_question_state(self) -> None:
         """
         Clear active runtime state of current question.
@@ -231,6 +317,7 @@ class GameController(QObject):
         self.current_question_resolved = True
         self.current_team_id = None
         self.remaining_seconds = 0
+        self.active_video_mode = None
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
 
@@ -295,6 +382,7 @@ class GameController(QObject):
         self.last_question = selected_question
         self.current_question_resolved = False
         self.current_team_id = active_team.id
+        self.active_video_mode = None
 
         self.game.state.current_team_id = active_team.id
         self.game.state.current_question_id = selected_question.id
@@ -329,21 +417,40 @@ class GameController(QObject):
         else:
             self.status_changed.emit("Вопрос показан.")
 
-        if getattr(self.current_question, "media_type", None) == "video":
-            media_path = getattr(self.current_question, "media_path", None)
-            if media_path:
-                self.video_requested.emit(media_path)
+        question_video_path = self._get_question_video_path(self.current_question)
+        if self.current_question.media_type == "video":
+            if question_video_path is not None:
+                self.active_video_mode = "question"
+                self.video_requested.emit(
+                    {
+                        "path": str(question_video_path),
+                        "mode": "question",
+                    }
+                )
                 self.status_changed.emit("Запущен видеовопрос.")
             else:
-                self.status_changed.emit("У видеовопроса не указан путь к файлу.")
+                self.status_changed.emit(
+                    "У видеовопроса не найден файл video_secret.mp4."
+                )
 
     def on_video_finished(self) -> None:
         """
-        Start timer automatically after video playback.
-        Автоматически запустить таймер после завершения видео.
+        Handle finished video depending on current video mode.
+        Обработать завершение видео в зависимости от текущего режима.
         """
-        self.status_changed.emit("Видео завершено. Таймер запускается автоматически.")
-        self.start_timer()
+        finished_mode = self.active_video_mode
+        self.active_video_mode = None
+
+        if finished_mode == "question":
+            self.status_changed.emit("Видео вопроса завершено. Таймер запускается автоматически.")
+            self.start_timer()
+            return
+
+        if finished_mode == "answer":
+            self.status_changed.emit("Видео ответа завершено.")
+            return
+
+        self.status_changed.emit("Видео завершено.")
 
     def repeat_question(self) -> None:
         """
@@ -364,12 +471,7 @@ class GameController(QObject):
         Показать ответ на текущий или последний вопрос.
         """
         question = self.current_question or self.last_question
-        if question is None:
-            self.status_changed.emit("Нет вопроса для показа ответа.")
-            return
-
-        self.answer_requested.emit(question.answer)
-        self.status_changed.emit("Ответ показан.")
+        self._reveal_answer(question)
 
     def start_timer(self) -> None:
         """
@@ -416,8 +518,8 @@ class GameController(QObject):
 
     def mark_correct(self) -> None:
         """
-        Mark answer as correct and award points.
-        Отметить ответ как верный, показать правильный ответ и начислить очки.
+        Mark answer as correct, reveal answer and award points.
+        Отметить ответ как верный, показать ответ и начислить очки.
         """
         if self.current_question is None or self.current_team_id is None:
             self.status_changed.emit("Нет активного вопроса или команды.")
@@ -428,9 +530,7 @@ class GameController(QObject):
             return
 
         self.timer.stop()
-
-        self.answer_requested.emit(self.current_question.answer)
-        self.last_question = self.current_question
+        self._reveal_answer(self.current_question)
 
         self.game.score_service.add_points(self.current_team_id, self.current_question.points)
         self.game.state.last_result_correct = True
@@ -438,8 +538,8 @@ class GameController(QObject):
 
     def mark_wrong(self) -> None:
         """
-        Mark answer as incorrect.
-        Отметить ответ как неверный и все равно показать правильный ответ.
+        Mark answer as incorrect and reveal answer.
+        Отметить ответ как неверный и показать ответ.
         """
         if self.current_question is None:
             self.status_changed.emit("Нет активного вопроса.")
@@ -450,9 +550,7 @@ class GameController(QObject):
             return
 
         self.timer.stop()
-
-        self.answer_requested.emit(self.current_question.answer)
-        self.last_question = self.current_question
+        self._reveal_answer(self.current_question)
 
         self.game.state.last_result_correct = False
         self._finalize_current_question("Ответ не засчитан.")
@@ -664,7 +762,10 @@ def run_app() -> int:
     controller.round_title_changed.connect(display_window.set_round_title)
     controller.status_changed.connect(display_window.set_status)
     controller.question_selected.connect(display_window.show_question)
-    controller.answer_requested.connect(display_window.show_answer)
+
+    controller.answer_requested.connect(admin_window._show_answer)
+    controller.public_answer_requested.connect(display_window.show_answer)
+
     controller.timer_updated.connect(display_window.timer_widget.set_seconds)
     controller.timer_started.connect(display_window.timer_widget.set_running)
     controller.timer_paused.connect(display_window.timer_widget.set_paused)

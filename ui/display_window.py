@@ -51,9 +51,9 @@ class DisplayWindow(QWidget):
 
         self.timer_widget = TimerWidget()
         self.scoreboard = ScoreboardWidget()
+
         self.video_widget = VideoWidget()
         self.video_widget.playback_finished.connect(self.video_finished.emit)
-
         self.video_widget.hide()
 
         left_layout = QVBoxLayout()
@@ -63,11 +63,15 @@ class DisplayWindow(QWidget):
         left_layout.addWidget(self.video_widget, 4)
         left_layout.addWidget(self.question_label)
         left_layout.addWidget(self.answer_label)
-        left_layout.addWidget(self.timer_widget)
+
+        right_layout = QVBoxLayout()
+        right_layout.addWidget(self.timer_widget)
+        right_layout.addWidget(self.scoreboard)
+        right_layout.addStretch()
 
         main_layout = QHBoxLayout()
         main_layout.addLayout(left_layout, 5)
-        main_layout.addWidget(self.scoreboard, 1)
+        main_layout.addLayout(right_layout, 1)
 
         self.setLayout(main_layout)
 
@@ -93,9 +97,13 @@ class DisplayWindow(QWidget):
         labels = payload.get("labels", [])
         target_index = payload.get("target_index", 0)
 
+        self.video_widget.stop()
         self.video_widget.hide()
         self.wheel.show()
+
+        self.question_label.clear()
         self.answer_label.clear()
+
         self.wheel.start_spin(labels, target_index)
 
     def show_question(self, question: Question) -> None:
@@ -103,14 +111,20 @@ class DisplayWindow(QWidget):
         Show current question.
         Показать текущий вопрос.
         """
+        self.video_widget.stop()
+        self.video_widget.hide()
+        self.wheel.show()
         self.question_label.setText(question.text)
         self.answer_label.clear()
 
     def show_answer(self, answer: str) -> None:
         """
-        Show current answer.
-        Показать текущий ответ.
+        Show current answer as text.
+        Показать текущий ответ текстом.
         """
+        self.video_widget.stop()
+        self.video_widget.hide()
+        self.wheel.show()
         self.answer_label.setText(f"Ответ: {answer}")
 
     def update_scores(self, teams: list[Team]) -> None:
@@ -120,11 +134,21 @@ class DisplayWindow(QWidget):
         """
         self.scoreboard.update_scores(teams)
 
-    def play_video(self, file_path: str) -> None:
+    def play_video(self, payload: dict) -> None:
         """
-        Play video on public screen.
-        Проиграть видео на публичном экране.
+        Play question or answer video on public screen.
+        Проиграть видео вопроса или видео ответа на публичном экране.
         """
+        file_path = payload.get("path")
+        mode = payload.get("mode", "question")
+
+        if not file_path:
+            self.status_label.setText("Путь к видео не указан.")
+            return
+
+        if mode == "answer":
+            self.answer_label.clear()
+
         self.wheel.hide()
         self.video_widget.show()
         self.video_widget.play_file(file_path)

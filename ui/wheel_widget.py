@@ -60,17 +60,19 @@ class WheelWidget(QWidget):
 
         sector_angle = 360.0 / len(self.labels)
 
-        target_center_angle = target_index * sector_angle + sector_angle / 2
-        pointer_angle = 90.0
-        needed_delta = pointer_angle - target_center_angle
+        # Было:
+        # target_rotation_mod = (target_index * sector_angle) % 360.0
 
-        while needed_delta < 0:
-            needed_delta += 360.0
+        # Нужно:
+        target_rotation_mod = (-target_index * sector_angle) % 360.0
+
+        current_rotation_mod = self._rotation % 360.0
+        delta_to_target = (target_rotation_mod - current_rotation_mod) % 360.0
 
         full_turns = random.randint(54, 72)
 
         self._start_rotation = self._rotation
-        self._final_rotation = self._rotation + full_turns * 360.0 + needed_delta
+        self._final_rotation = self._rotation + full_turns * 360.0 + delta_to_target
         self._total_delta = self._final_rotation - self._start_rotation
 
         self._build_motion_curve()
@@ -112,15 +114,9 @@ class WheelWidget(QWidget):
         """
         progress = max(0.0, min(1.0, progress))
 
-        # Быстрый старт из почти нулевой скорости.
         ramp_up = 1.0 - math.exp(-18.0 * progress)
-
-        # Плавное постепенное затухание на всей длине анимации.
         decay = pow(1.0 - progress, 1.35)
-
         speed = ramp_up * decay
-
-        # Под конец прижимаем скорость сильнее, чтобы остановка была мягкой.
         final_soft_stop = pow(1.0 - progress, 0.9)
 
         return max(speed * final_soft_stop, 0.0)
@@ -218,17 +214,19 @@ class WheelWidget(QWidget):
         painter.translate(-center_x, -center_y)
 
         for index, label in enumerate(self.labels):
-            start_deg = 90 - index * sector_angle
+            # Первый сектор сразу центрирован под стрелкой.
+            start_deg = 90.0 + sector_angle / 2 - index * sector_angle
+
             painter.setBrush(colors[index % len(colors)])
             painter.setPen(QPen(Qt.black, 2))
             painter.drawPie(rect, int(start_deg * 16), int(-sector_angle * 16))
 
-            text_angle = start_deg - sector_angle / 2
+            text_angle = 90.0 - index * sector_angle
             radius = rect.width() / 2 * 0.62
             text_x = center_x + radius * math.cos(math.radians(text_angle))
             text_y = center_y - radius * math.sin(math.radians(text_angle))
 
-            text_rect = QRectF(text_x - 55, text_y - 16, 110, 32)
+            text_rect = QRectF(text_x - 60, text_y - 18, 120, 36)
             painter.save()
             painter.setPen(Qt.white)
             painter.setFont(QFont("Arial", 9, QFont.Bold))

@@ -1,3 +1,4 @@
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from models.team import Team
@@ -17,7 +18,9 @@ class ScoreboardWidget(QWidget):
         super().__init__(parent)
 
         self.layout_main = QVBoxLayout()
+
         self.title_label = QLabel("Счет команд")
+        self.title_label.setFont(QFont("Arial", 18, QFont.Bold))
         self.layout_main.addWidget(self.title_label)
 
         self.team_labels: list[QLabel] = []
@@ -37,5 +40,6 @@ class ScoreboardWidget(QWidget):
 
         for team in teams:
             label = QLabel(f"{team.name}: {team.score}")
+            label.setFont(QFont("Arial", 26, QFont.Bold))
             self.layout_main.addWidget(label)
             self.team_labels.append(label)

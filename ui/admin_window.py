@@ -210,8 +210,10 @@ class AdminWindow(QWidget):
         Start wheel for current round and current queue team.
         Запустить колесо для текущего раунда и текущей команды по очереди.
         """
-        round_id = self.round_combo.currentData()
-        self.controller.select_round(round_id)
+        if self.controller.game.state.current_round_id is None:
+            round_id = self.round_combo.currentData()
+            self.controller.select_round(round_id)
+
         self.controller.spin_next_question()
 
     def _show_question(self, question: Question) -> None:
