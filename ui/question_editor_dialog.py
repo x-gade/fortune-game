@@ -14,25 +14,30 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from models.question import Question
+
 
 class QuestionEditorDialog(QDialog):
     """
-    Dialog for creating a new question.
-    Диалог создания нового вопроса.
+    Dialog for creating or editing a question.
+    Диалог создания или редактирования вопроса.
     """
 
     MEDIA_ROOT = Path("data/media")
     SECRET_VIDEO_NAME = "video_secret.mp4"
     RESPONSE_VIDEO_NAME = "video_response.mp4"
 
-    def __init__(self, rounds: list, parent=None) -> None:
+    def __init__(self, rounds: list, question: Question | None = None, parent=None) -> None:
         """
         Initialize question editor dialog.
-        Инициализация диалога создания вопроса.
+        Инициализация диалога создания или редактирования вопроса.
         """
         super().__init__(parent)
 
-        self.setWindowTitle("Добавить вопрос")
+        self.question = question
+        self.is_edit_mode = question is not None
+
+        self.setWindowTitle("Изменить вопрос" if self.is_edit_mode else "Добавить вопрос")
         self.resize(620, 680)
 
         self.round_combo = QComboBox()
@@ -71,19 +76,20 @@ class QuestionEditorDialog(QDialog):
         self.media_info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.media_info_label.setStyleSheet("color: #d0d0d0;")
 
-        self.used_checkbox = QCheckBox("Сразу пометить как закрытый")
+        self.used_checkbox = QCheckBox("Пометить как закрытый")
         self.used_checkbox.setChecked(False)
 
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #ff6b6b;")
         self.error_label.setAlignment(Qt.AlignCenter)
 
-        self.save_button = QPushButton("Сохранить")
+        self.save_button = QPushButton("Сохранить изменения" if self.is_edit_mode else "Сохранить")
         self.cancel_button = QPushButton("Отмена")
 
         self._build_layout()
         self._connect_events()
         self._reload_media_folders()
+        self._fill_from_question()
         self._apply_media_mode()
 
     def _build_layout(self) -> None:
@@ -130,6 +136,39 @@ class QuestionEditorDialog(QDialog):
         self.refresh_media_button.clicked.connect(self._reload_media_folders)
         self.media_type_combo.currentIndexChanged.connect(self._apply_media_mode)
         self.media_folder_combo.currentIndexChanged.connect(self._update_media_info)
+
+    def _fill_from_question(self) -> None:
+        """
+        Fill dialog fields from existing question in edit mode.
+        Заполнить поля диалога данными существующего вопроса в режиме редактирования.
+        """
+        if self.question is None:
+            return
+
+        self.question_text.setPlainText(self.question.text)
+        self.answer_text.setPlainText(self.question.answer)
+        self.timer_spin.setValue(max(1, self.question.timer_seconds))
+        self.points_spin.setValue(max(0, self.question.points))
+        self.category_input.setPlainText(self.question.category or "")
+        self.used_checkbox.setChecked(self.question.used)
+
+        self._set_combo_data(self.round_combo, self.question.round_id)
+        self._set_combo_data(self.difficulty_combo, self.question.difficulty)
+        self._set_combo_data(self.media_type_combo, self.question.media_type)
+
+        if self.question.media_path:
+            self._set_combo_data(self.media_folder_combo, self.question.media_path)
+
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, target_data) -> None:
+        """
+        Set combo current item by data value.
+        Установить текущий элемент комбобокса по data-значению.
+        """
+        for index in range(combo.count()):
+            if combo.itemData(index) == target_data:
+                combo.setCurrentIndex(index)
+                return
 
     def _reload_media_folders(self) -> None:
         """
@@ -271,8 +310,8 @@ class QuestionEditorDialog(QDialog):
 
     def get_payload(self) -> dict:
         """
-        Return dialog payload for creating question.
-        Вернуть полезную нагрузку диалога для создания вопроса.
+        Return dialog payload for creating or updating question.
+        Вернуть полезную нагрузку диалога для создания или обновления вопроса.
         """
         media_type = self.media_type_combo.currentData()
         media_dir = self._get_selected_media_dir()

@@ -5,7 +5,9 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -57,6 +59,17 @@ class AdminWindow(QWidget):
         self.next_team_value = QLabel("Нет следующей команды")
         self.round_progress_value = QLabel("Раунд не выбран")
 
+        self.manual_score_team_combo = QComboBox()
+        for team in self.controller.game.teams:
+            self.manual_score_team_combo.addItem(team.name, team.id)
+
+        self.manual_score_spin = QSpinBox()
+        self.manual_score_spin.setRange(1, 100000)
+        self.manual_score_spin.setValue(100)
+
+        self.manual_add_points_button = QPushButton("Начислить очки")
+        self.manual_remove_points_button = QPushButton("Списать очки")
+
         self.question_filter_round_combo = QComboBox()
         self.question_filter_round_combo.addItem("Все раунды", None)
         for round_item in self.controller.game.rounds:
@@ -71,6 +84,8 @@ class AdminWindow(QWidget):
         self.reset_round_button = QPushButton("Сбросить раунд")
         self.reset_all_button = QPushButton("Сбросить все")
         self.add_question_button = QPushButton("Добавить вопрос")
+        self.edit_question_button = QPushButton("Изменить вопрос")
+        self.delete_question_button = QPushButton("Удалить вопрос")
 
         self.wheel = WheelWidget()
         self.timer_widget = TimerWidget()
@@ -103,7 +118,6 @@ class AdminWindow(QWidget):
         self.controller.active_team_changed.connect(self.current_team_value.setText)
         self.controller.next_team_changed.connect(self.next_team_value.setText)
         self.controller.round_progress_changed.connect(self.round_progress_value.setText)
-
         self.controller.video_state_changed.connect(self._update_video_button_state)
 
         self.scoreboard.update_scores(self.controller.game.teams)
@@ -146,6 +160,17 @@ class AdminWindow(QWidget):
         timer_row.addWidget(self.timer_pause_resume_button)
         timer_row.addWidget(self.timer_stop_button)
 
+        manual_score_grid = QGridLayout()
+        manual_score_grid.addWidget(QLabel("Ручная корректировка счета:"), 0, 0, 1, 3)
+        manual_score_grid.addWidget(QLabel("Команда:"), 1, 0)
+        manual_score_grid.addWidget(self.manual_score_team_combo, 1, 1, 1, 2)
+
+        manual_score_grid.addWidget(QLabel("Очки:"), 2, 0)
+        manual_score_grid.addWidget(self.manual_score_spin, 2, 1, 1, 2)
+
+        manual_score_grid.addWidget(self.manual_add_points_button, 3, 1)
+        manual_score_grid.addWidget(self.manual_remove_points_button, 3, 2)
+
         questions_manage_grid = QGridLayout()
         questions_manage_grid.addWidget(QLabel("Фильтр по раунду:"), 0, 0)
         questions_manage_grid.addWidget(self.question_filter_round_combo, 0, 1)
@@ -160,8 +185,11 @@ class AdminWindow(QWidget):
         questions_manage_grid.addWidget(self.reset_current_question_button, 3, 1)
         questions_manage_grid.addWidget(self.reset_round_button, 3, 2)
 
-        questions_manage_grid.addWidget(self.reset_all_button, 4, 0)
-        questions_manage_grid.addWidget(self.add_question_button, 4, 1, 1, 2)
+        questions_manage_grid.addWidget(self.edit_question_button, 4, 0)
+        questions_manage_grid.addWidget(self.delete_question_button, 4, 1)
+        questions_manage_grid.addWidget(self.add_question_button, 4, 2)
+
+        questions_manage_grid.addWidget(self.reset_all_button, 5, 0, 1, 3)
 
         left_layout = QVBoxLayout()
         left_layout.addLayout(top_controls)
@@ -170,6 +198,7 @@ class AdminWindow(QWidget):
         left_layout.addLayout(video_row)
         left_layout.addLayout(timer_row)
         left_layout.addWidget(self.timer_widget)
+        left_layout.addLayout(manual_score_grid)
         left_layout.addWidget(QLabel("Управление вопросами:"))
         left_layout.addLayout(questions_manage_grid)
         left_layout.addWidget(QLabel("Текущий вопрос:"))
@@ -201,14 +230,19 @@ class AdminWindow(QWidget):
         self.timer_pause_resume_button.clicked.connect(self._toggle_timer_pause_resume)
         self.timer_stop_button.clicked.connect(self.controller.stop_timer)
 
+        self.manual_add_points_button.clicked.connect(self._add_manual_points)
+        self.manual_remove_points_button.clicked.connect(self._remove_manual_points)
+
         self.refresh_questions_button.clicked.connect(self.refresh_question_list)
         self.question_filter_round_combo.currentIndexChanged.connect(self.refresh_question_list)
-        self.question_select_combo.currentIndexChanged.connect(self._sync_selected_question_state)
+        self.question_select_combo.currentIndexChanged.connect(self._on_selected_question_changed)
         self.save_question_state_button.clicked.connect(self._save_question_used_state)
         self.reset_current_question_button.clicked.connect(self._reset_current_question)
         self.reset_round_button.clicked.connect(self._reset_round_questions)
         self.reset_all_button.clicked.connect(self.controller.reset_all_questions)
         self.add_question_button.clicked.connect(self._open_add_question_dialog)
+        self.edit_question_button.clicked.connect(self._open_edit_question_dialog)
+        self.delete_question_button.clicked.connect(self._delete_selected_question)
 
     def _select_round(self) -> None:
         """
@@ -312,6 +346,24 @@ class AdminWindow(QWidget):
         self.timer_widget.set_stopped()
         self.timer_pause_resume_button.setText("Пауза таймера")
 
+    def _add_manual_points(self) -> None:
+        """
+        Add manual points to selected team.
+        Начислить вручную очки выбранной команде.
+        """
+        team_id = self.manual_score_team_combo.currentData()
+        points = self.manual_score_spin.value()
+        self.controller.add_manual_points(team_id=team_id, points=points)
+
+    def _remove_manual_points(self) -> None:
+        """
+        Remove manual points from selected team.
+        Списать вручную очки у выбранной команды.
+        """
+        team_id = self.manual_score_team_combo.currentData()
+        points = self.manual_score_spin.value()
+        self.controller.remove_manual_points(team_id=team_id, points=points)
+
     def refresh_question_list(self) -> None:
         """
         Rebuild question selection list.
@@ -327,9 +379,10 @@ class AdminWindow(QWidget):
 
         for question in questions:
             used_mark = "закрыт" if question.used else "открыт"
+            media_mark = " [VIDEO]" if question.media_type == "video" else ""
             short_text = question.text[:60].replace("\n", " ")
             self.question_select_combo.addItem(
-                f"#{question.id} [{used_mark}] {short_text}",
+                f"#{question.id} [{used_mark}] {short_text}{media_mark}",
                 question.id,
             )
 
@@ -348,6 +401,15 @@ class AdminWindow(QWidget):
 
         self.question_select_combo.blockSignals(False)
         self._sync_selected_question_state()
+        self._sync_selected_question_preview()
+
+    def _on_selected_question_changed(self) -> None:
+        """
+        Handle question selection change.
+        Обработать смену выбранного вопроса.
+        """
+        self._sync_selected_question_state()
+        self._sync_selected_question_preview()
 
     def _sync_selected_question_state(self) -> None:
         """
@@ -359,12 +421,32 @@ class AdminWindow(QWidget):
             self.question_used_checkbox.setChecked(False)
             return
 
-        question = self.controller.game.question_service.get_question_by_id(question_id)
+        question = self.controller.get_question_by_id(question_id)
         if question is None:
             self.question_used_checkbox.setChecked(False)
             return
 
         self.question_used_checkbox.setChecked(question.used)
+
+    def _sync_selected_question_preview(self) -> None:
+        """
+        Sync question and answer preview with selected question.
+        Синхронизировать предпросмотр вопроса и ответа с выбранным вопросом.
+        """
+        question_id = self.question_select_combo.currentData()
+        if question_id is None:
+            self.question_text.clear()
+            self.answer_text.clear()
+            return
+
+        question = self.controller.get_question_by_id(question_id)
+        if question is None:
+            self.question_text.clear()
+            self.answer_text.clear()
+            return
+
+        self.question_text.setPlainText(question.text)
+        self.answer_text.setPlainText(question.answer or "")
 
     def _save_question_used_state(self) -> None:
         """
@@ -418,3 +500,61 @@ class AdminWindow(QWidget):
         if dialog.exec():
             payload = dialog.get_payload()
             self.controller.add_question(payload)
+
+    def _open_edit_question_dialog(self) -> None:
+        """
+        Open dialog for editing selected question.
+        Открыть диалог редактирования выбранного вопроса.
+        """
+        question_id = self.question_select_combo.currentData()
+        if question_id is None:
+            self.status_label.setText("Вопрос не выбран.")
+            return
+
+        question = self.controller.get_question_by_id(question_id)
+        if question is None:
+            self.status_label.setText("Выбранный вопрос не найден.")
+            return
+
+        dialog = QuestionEditorDialog(
+            rounds=self.controller.game.rounds,
+            question=question,
+            parent=self,
+        )
+
+        if dialog.exec():
+            payload = dialog.get_payload()
+            self.controller.update_question(question_id, payload)
+
+    def _delete_selected_question(self) -> None:
+        """
+        Delete selected question after confirmation.
+        Удалить выбранный вопрос после подтверждения.
+        """
+        question_id = self.question_select_combo.currentData()
+        if question_id is None:
+            self.status_label.setText("Вопрос не выбран.")
+            return
+
+        question = self.controller.get_question_by_id(question_id)
+        if question is None:
+            self.status_label.setText("Выбранный вопрос не найден.")
+            return
+
+        short_text = question.text[:120].replace("\n", " ")
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение удаления",
+            (
+                f"Удалить вопрос #{question.id}?\n\n"
+                f"{short_text}\n\n"
+                "Это действие нельзя отменить."
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        self.controller.delete_question(question_id)

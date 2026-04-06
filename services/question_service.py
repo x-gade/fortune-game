@@ -125,6 +125,39 @@ class QuestionService:
         """
         self.questions.append(question)
 
+    def update_question(self, question_id: int, payload: dict) -> Question:
+        """
+        Update existing question fields from payload.
+        Обновить поля существующего вопроса из payload.
+        """
+        question = self.get_question_by_id(question_id)
+        if question is None:
+            raise ValueError(f"Вопрос с id={question_id} не найден")
+
+        question.round_id = payload["round_id"]
+        question.text = payload["text"]
+        question.answer = payload["answer"]
+        question.timer_seconds = payload["timer_seconds"]
+        question.points = payload["points"]
+        question.used = payload["used"]
+        question.category = payload["category"]
+        question.difficulty = payload["difficulty"]
+        question.media_type = payload["media_type"]
+        question.media_path = payload["media_path"]
+
+        return question
+
+    def delete_question(self, question_id: int) -> Question:
+        """
+        Delete question from storage and return removed object.
+        Удалить вопрос из хранилища и вернуть удаленный объект.
+        """
+        for index, question in enumerate(self.questions):
+            if question.id == question_id:
+                return self.questions.pop(index)
+
+        raise ValueError(f"Вопрос с id={question_id} не найден")
+
     def get_question_timer(self, question: Question) -> int:
         """
         Return effective timer value for question.

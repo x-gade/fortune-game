@@ -822,6 +822,60 @@ class GameController(QObject):
         state_text = "закрыт" if used else "открыт"
         self.status_changed.emit(f"Вопрос #{question_id} теперь {state_text}.")
 
+    def add_manual_points(self, team_id: int | None, points: int) -> None:
+        """
+        Add manual bonus points to selected team.
+        Начислить вручную бонусные очки выбранной команде.
+        """
+        if team_id is None:
+            self.status_changed.emit("Команда для начисления не выбрана.")
+            return
+
+        if points <= 0:
+            self.status_changed.emit("Количество очков должно быть больше нуля.")
+            return
+
+        self.game.score_service.add_points(team_id, points)
+        self.game.data_loader.save_all(
+            settings=self.game.settings,
+            teams=self.game.teams,
+            rounds=self.game.rounds,
+            questions=self.game.questions,
+        )
+        self.scoreboard_changed.emit(self.game.teams)
+
+        team = self.game.score_service.get_team_by_id(team_id)
+        self.status_changed.emit(
+            f"Команде '{team.name}' начислено {points} очков вручную."
+        )
+
+    def remove_manual_points(self, team_id: int | None, points: int) -> None:
+        """
+        Remove manual penalty points from selected team.
+        Списать вручную штрафные очки у выбранной команды.
+        """
+        if team_id is None:
+            self.status_changed.emit("Команда для списания не выбрана.")
+            return
+
+        if points <= 0:
+            self.status_changed.emit("Количество очков должно быть больше нуля.")
+            return
+
+        self.game.score_service.remove_points(team_id, points)
+        self.game.data_loader.save_all(
+            settings=self.game.settings,
+            teams=self.game.teams,
+            rounds=self.game.rounds,
+            questions=self.game.questions,
+        )
+        self.scoreboard_changed.emit(self.game.teams)
+
+        team = self.game.score_service.get_team_by_id(team_id)
+        self.status_changed.emit(
+            f"У команды '{team.name}' списано {points} очков вручную."
+        )
+
     def add_question(self, payload: dict) -> None:
         """
         Create and store new question from dialog payload.
@@ -845,6 +899,50 @@ class GameController(QObject):
         self.game.question_service.add_question(question)
         self.save_questions_state()
         self.status_changed.emit(f"Добавлен вопрос #{question.id}.")
+
+    def update_question(self, question_id: int, payload: dict) -> None:
+        """
+        Update existing question and persist changes.
+        Обновить существующий вопрос и сохранить изменения.
+        """
+        question = self.game.question_service.update_question(question_id, payload)
+
+        if self.current_question is not None and self.current_question.id == question_id:
+            self.current_question = question
+
+        if self.last_question is not None and self.last_question.id == question_id:
+            self.last_question = question
+
+        self.save_questions_state()
+        self.status_changed.emit(f"Вопрос #{question_id} обновлен.")
+
+    def delete_question(self, question_id: int) -> None:
+        """
+        Delete question and persist changes.
+        Active question cannot be deleted during game flow.
+        Удалить вопрос и сохранить изменения.
+        Активный вопрос нельзя удалить во время игрового хода.
+        """
+        if self.current_question is not None and self.current_question.id == question_id:
+            self.status_changed.emit(
+                "Нельзя удалить вопрос, который сейчас участвует в игровом ходе."
+            )
+            return
+
+        removed_question = self.game.question_service.delete_question(question_id)
+
+        if self.last_question is not None and self.last_question.id == question_id:
+            self.last_question = None
+
+        self.save_questions_state()
+        self.status_changed.emit(f"Вопрос #{removed_question.id} удален.")
+
+    def get_question_by_id(self, question_id: int) -> Question | None:
+        """
+        Return question by identifier for UI helpers.
+        Вернуть вопрос по идентификатору для UI-хелперов.
+        """
+        return self.game.question_service.get_question_by_id(question_id)
 
     def get_active_team_name(self) -> str:
         """
