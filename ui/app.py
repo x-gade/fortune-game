@@ -125,7 +125,41 @@ class GameController(QObject):
         self.wheel_player = QMediaPlayer(self)
         self.wheel_player.setAudioOutput(self.wheel_audio_output)
 
+        self.timer_tick_audio_output = QAudioOutput(self)
+        self.timer_tick_audio_output.setVolume(0.10)
+
+        self.timer_tick_player = QMediaPlayer(self)
+        self.timer_tick_player.setAudioOutput(self.timer_tick_audio_output)
+        self.timer_tick_player.setLoops(QMediaPlayer.Infinite)
+
+        self.timer_heartbeat_audio_output = QAudioOutput(self)
+        self.timer_heartbeat_audio_output.setVolume(0.55)
+
+        self.timer_heartbeat_player = QMediaPlayer(self)
+        self.timer_heartbeat_player.setAudioOutput(self.timer_heartbeat_audio_output)
+
+        self.gong_audio_output = QAudioOutput(self)
+        self.gong_audio_output.setVolume(1.0)
+
+        self.gong_player = QMediaPlayer(self)
+        self.gong_player.setAudioOutput(self.gong_audio_output)
+
         self.wheel_sound_path = Path("assets") / "wolf.mp3"
+        self.timer_tick_sound_path = Path("assets") / "ticking-timer.mp3"
+        self.timer_heartbeat_sound_path = Path("assets") / "human-single-heart-beat.wav"
+        self.gong_sound_path = Path("assets") / "gong.mp3"
+
+        self._timer_tick_loop_enabled = False
+
+        self._gong_fade_timer = QTimer(self)
+        self._gong_fade_timer.setInterval(50)
+        self._gong_fade_timer.timeout.connect(self._process_gong_fade)
+
+        self._gong_duration_ms = 0
+        self._gong_elapsed_ms = 0
+        self._gong_fade_start_ratio = 0.50
+        self._gong_fade_end_ratio = 0.75
+
         self.active_video_mode: str | None = None
         self.answer_already_revealed: bool = False
 
@@ -246,6 +280,192 @@ class GameController(QObject):
         Остановить звук волчка после завершения вращения.
         """
         self.wheel_player.stop()
+
+    def _set_timer_tick_volume_for_seconds(self, seconds: int) -> None:
+        """
+        Set timer tick volume depending on remaining seconds.
+
+        До 30 секунд тик тихий.
+        С 30 до 6 секунд громкость увеличивается примерно на 20%.
+
+        Настроить громкость тика таймера в зависимости от оставшегося времени.
+
+        До 30 секунд тик тихий.
+        С 30 до 6 секунд громкость увеличивается примерно на 20%.
+        """
+        base_volume = 0.10
+        boosted_volume = base_volume * 1.20
+
+        if seconds > 30:
+            self.timer_tick_audio_output.setVolume(base_volume)
+            return
+
+        if 6 <= seconds <= 30:
+            self.timer_tick_audio_output.setVolume(boosted_volume)
+            return
+
+        self.timer_tick_audio_output.setVolume(base_volume)
+
+    def _start_timer_tick_loop(self) -> None:
+        """
+        Start quiet looping timer tick sound.
+        Запустить зацикленное тихое тиканье таймера.
+        """
+        if not self.timer_tick_sound_path.exists():
+            return
+
+        source_url = QUrl.fromLocalFile(str(self.timer_tick_sound_path.resolve()))
+
+        if self.timer_tick_player.source() != source_url:
+            self.timer_tick_player.setSource(source_url)
+
+        self._set_timer_tick_volume_for_seconds(self.remaining_seconds)
+        self._timer_tick_loop_enabled = True
+
+        if self.timer_tick_player.playbackState() != QMediaPlayer.PlayingState:
+            self.timer_tick_player.play()
+
+    def _stop_timer_tick_loop(self) -> None:
+        """
+        Stop looping timer tick sound.
+        Остановить зацикленное тиканье таймера.
+        """
+        self._timer_tick_loop_enabled = False
+        self.timer_tick_player.stop()
+
+    def _play_timer_heartbeat_once(self) -> None:
+        """
+        Play heartbeat sound once.
+        Проиграть один удар сердца.
+        """
+        if not self.timer_heartbeat_sound_path.exists():
+            return
+
+        source_url = QUrl.fromLocalFile(str(self.timer_heartbeat_sound_path.resolve()))
+
+        if self.timer_heartbeat_player.source() != source_url:
+            self.timer_heartbeat_player.setSource(source_url)
+
+        self.timer_heartbeat_player.stop()
+        self.timer_heartbeat_player.play()
+
+    def _play_gong(self) -> None:
+        """
+        Play gong sound and fade it out programmatically.
+
+        The gong starts at full volume.
+        From 50% of its duration volume begins to fade out.
+        By 75% of its duration the sound becomes fully silent and stops.
+
+        Проиграть звук гонга и плавно затушить его программно.
+
+        Гонг запускается на полной громкости.
+        С 50% длительности начинается плавное затухание.
+        К 75% длительности звук полностью затихает и останавливается.
+        """
+        if not self.gong_sound_path.exists():
+            return
+
+        source_url = QUrl.fromLocalFile(str(self.gong_sound_path.resolve()))
+
+        if self.gong_player.source() != source_url:
+            self.gong_player.setSource(source_url)
+
+        self._stop_gong()
+
+        self.gong_audio_output.setVolume(1.0)
+        self._gong_elapsed_ms = 0
+        self._gong_duration_ms = 0
+
+        self.gong_player.play()
+
+        QTimer.singleShot(120, self._start_gong_fade_logic)
+
+    def _start_gong_fade_logic(self) -> None:
+        """
+        Start gong fade timer after media duration becomes available.
+        Запустить таймер затухания гонга после получения длительности медиа.
+        """
+        duration = self.gong_player.duration()
+
+        if duration <= 0:
+            QTimer.singleShot(120, self._start_gong_fade_logic)
+            return
+
+        self._gong_duration_ms = duration
+        self._gong_elapsed_ms = 0
+        self._gong_fade_timer.start()
+
+    def _process_gong_fade(self) -> None:
+        """
+        Process gong fade-out in real time.
+        Обработать плавное затухание гонга в реальном времени.
+        """
+        if self._gong_duration_ms <= 0:
+            self._stop_gong()
+            return
+
+        step_ms = self._gong_fade_timer.interval()
+        self._gong_elapsed_ms += step_ms
+
+        fade_start_ms = int(self._gong_duration_ms * self._gong_fade_start_ratio)
+        fade_end_ms = int(self._gong_duration_ms * self._gong_fade_end_ratio)
+
+        if self._gong_elapsed_ms < fade_start_ms:
+            return
+
+        if self._gong_elapsed_ms >= fade_end_ms:
+            self.gong_audio_output.setVolume(0.0)
+            self._stop_gong()
+            return
+
+        fade_range = max(fade_end_ms - fade_start_ms, 1)
+        progress = (self._gong_elapsed_ms - fade_start_ms) / fade_range
+        volume = 1.0 - progress
+
+        self.gong_audio_output.setVolume(max(0.0, min(1.0, volume)))
+
+    def _stop_gong(self) -> None:
+        """
+        Stop gong playback and fade timer.
+        Остановить воспроизведение гонга и таймер затухания.
+        """
+        self._gong_fade_timer.stop()
+        self.gong_player.stop()
+        self.gong_audio_output.setVolume(1.0)
+        self._gong_duration_ms = 0
+        self._gong_elapsed_ms = 0
+
+    def _stop_all_timer_sounds(self) -> None:
+        """
+        Stop all timer-related sounds.
+        Остановить все звуки таймера.
+        """
+        self._stop_timer_tick_loop()
+        self.timer_heartbeat_player.stop()
+        self._stop_gong()
+
+    def _sync_timer_sound_state(self) -> None:
+        """
+        Synchronize timer sound mode with current remaining seconds.
+        Синхронизировать режим звука таймера с текущим остатком секунд.
+        """
+        if not self.timer.isActive():
+            self._stop_all_timer_sounds()
+            return
+
+        if self.remaining_seconds <= 0:
+            self._stop_all_timer_sounds()
+            return
+
+        if self.remaining_seconds <= 5:
+            self._stop_timer_tick_loop()
+            return
+
+        self._set_timer_tick_volume_for_seconds(self.remaining_seconds)
+
+        if not self._timer_tick_loop_enabled:
+            self._start_timer_tick_loop()
 
     def _get_media_dir(self, question: Question | None) -> Path | None:
         """
@@ -372,6 +592,7 @@ class GameController(QObject):
         """
         self.timer.stop()
         self._stop_wheel_sound()
+        self._stop_all_timer_sounds()
 
         if self.display_window is not None:
             self.display_window.stop_video()
@@ -559,10 +780,17 @@ class GameController(QObject):
             return
 
         if self.remaining_seconds <= 0:
-            self.remaining_seconds = self.game.question_service.get_question_timer(self.current_question)
+            self.remaining_seconds = self.game.question_service.get_question_timer(
+                self.current_question
+            )
             self.timer_updated.emit(self.remaining_seconds)
 
         self.timer.start()
+        self._sync_timer_sound_state()
+
+        if 0 < self.remaining_seconds <= 5:
+            self._play_timer_heartbeat_once()
+
         self.timer_started.emit()
         self.status_changed.emit("Таймер запущен.")
 
@@ -573,6 +801,7 @@ class GameController(QObject):
         """
         if self.timer.isActive():
             self.timer.stop()
+            self._stop_all_timer_sounds()
             self.timer_paused.emit()
             self.status_changed.emit("Таймер поставлен на паузу.")
 
@@ -582,9 +811,12 @@ class GameController(QObject):
         Остановить таймер и сбросить текущее значение отсчета.
         """
         self.timer.stop()
+        self._stop_all_timer_sounds()
 
         if self.current_question is not None:
-            self.remaining_seconds = self.game.question_service.get_question_timer(self.current_question)
+            self.remaining_seconds = self.game.question_service.get_question_timer(
+                self.current_question
+            )
         else:
             self.remaining_seconds = 0
 
@@ -660,6 +892,7 @@ class GameController(QObject):
             return
 
         self.timer.stop()
+        self._stop_all_timer_sounds()
         self.timer_stopped.emit()
 
         if not self.answer_already_revealed:
@@ -685,6 +918,7 @@ class GameController(QObject):
             return
 
         self.timer.stop()
+        self._stop_all_timer_sounds()
         self.timer_stopped.emit()
 
         if not self.answer_already_revealed:
@@ -725,6 +959,7 @@ class GameController(QObject):
         self.current_team_id = None
         self.remaining_seconds = 0
         self.active_video_mode = None
+        self._stop_all_timer_sounds()
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
         self.video_state_changed.emit()
@@ -748,10 +983,20 @@ class GameController(QObject):
         Уменьшить таймер на одну секунду.
         """
         self.remaining_seconds -= 1
-        self.timer_updated.emit(max(self.remaining_seconds, 0))
+        current_value = max(self.remaining_seconds, 0)
+
+        self.timer_updated.emit(current_value)
+
+        if 0 < current_value <= 5:
+            self._stop_timer_tick_loop()
+            self._play_timer_heartbeat_once()
+        elif current_value > 5:
+            self._sync_timer_sound_state()
 
         if self.remaining_seconds <= 0:
             self.timer.stop()
+            self._stop_all_timer_sounds()
+            self._play_gong()
             self.timer_stopped.emit()
             self.status_changed.emit("Время вышло.")
 
@@ -823,7 +1068,11 @@ class GameController(QObject):
         """
         self.game.question_service.set_used(question_id, used)
 
-        if self.current_question is not None and self.current_question.id == question_id and not used:
+        if (
+            self.current_question is not None
+            and self.current_question.id == question_id
+            and not used
+        ):
             self.current_question_resolved = False
 
         self.save_questions_state()
@@ -1073,7 +1322,10 @@ class GameController(QObject):
             self.status_changed.emit("Название раунда не может быть пустым.")
             return
 
-        if any(round_item.name.casefold() == normalized_name.casefold() for round_item in self.game.rounds):
+        if any(
+            round_item.name.casefold() == normalized_name.casefold()
+            for round_item in self.game.rounds
+        ):
             self.status_changed.emit("Раунд с таким названием уже существует.")
             return
 
@@ -1142,7 +1394,6 @@ class GameController(QObject):
         self.rounds_changed.emit()
         self.status_changed.emit(f"Раунд '{removed_round.name}' удален.")
 
-
     def get_active_team_name(self) -> str:
         """
         Return active team display name.
@@ -1192,7 +1443,6 @@ def run_app() -> int:
     controller.timer_stopped.connect(display_window.timer_widget.set_stopped)
     controller.video_requested.connect(display_window.play_video)
 
-    controller.wheel_spin_requested.connect(admin_window.wheel.start_spin)
     controller.wheel_spin_requested.connect(
         lambda labels, index: display_window.start_wheel_animation(
             {"labels": labels, "target_index": index}

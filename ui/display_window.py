@@ -1,6 +1,6 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCloseEvent, QHideEvent, QShowEvent
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from models.question import Question
 from models.team import Team
@@ -52,7 +52,14 @@ class DisplayWindow(QWidget):
         self.answer_label.setStyleSheet("font-size: 22px; color: #FFD166; padding: 12px;")
 
         self.timer_widget = TimerWidget()
+        self.timer_widget.setMinimumWidth(460)
+        self.timer_widget.setMaximumWidth(520)
+        self.timer_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
         self.scoreboard = ScoreboardWidget()
+        self.scoreboard.setMinimumWidth(220)
+        self.scoreboard.setMaximumWidth(240)
+        self.scoreboard.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
         self.video_widget = VideoWidget()
         self.video_widget.playback_finished.connect(self.video_finished.emit)
@@ -68,16 +75,16 @@ class DisplayWindow(QWidget):
         left_layout.addWidget(self.answer_label)
 
         right_layout = QVBoxLayout()
-        right_layout.setSpacing(14)
-        right_layout.addWidget(self.timer_widget)
-        right_layout.addWidget(self.scoreboard)
+        right_layout.setSpacing(18)
+        right_layout.addWidget(self.timer_widget, 0, Qt.AlignHCenter | Qt.AlignTop)
+        right_layout.addWidget(self.scoreboard, 0, Qt.AlignHCenter | Qt.AlignTop)
         right_layout.addStretch()
 
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(20)
         main_layout.addLayout(left_layout, 5)
-        main_layout.addLayout(right_layout, 1)
+        main_layout.addLayout(right_layout, 2)
 
         self.setLayout(main_layout)
 

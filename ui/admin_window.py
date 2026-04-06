@@ -72,7 +72,12 @@ class AdminWindow(QWidget):
         self.display_window_button = QPushButton("Показать игровое окно")
 
         self.wheel = WheelWidget()
+
         self.timer_widget = TimerWidget()
+        self.timer_widget.setMinimumWidth(440)
+        self.timer_widget.setMaximumWidth(520)
+        self.timer_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         self.scoreboard = ScoreboardWidget()
         self.scoreboard.setMinimumWidth(220)
 
@@ -305,6 +310,11 @@ class AdminWindow(QWidget):
         windows_row.addWidget(self.settings_button, 1)
         windows_row.addWidget(self.display_window_button, 1)
 
+        timer_block_row = QHBoxLayout()
+        timer_block_row.addStretch()
+        timer_block_row.addWidget(self.timer_widget)
+        timer_block_row.addStretch()
+
         left_layout = QVBoxLayout()
         left_layout.setSpacing(10)
         left_layout.addLayout(top_section)
@@ -312,7 +322,7 @@ class AdminWindow(QWidget):
         left_layout.addLayout(button_row)
         left_layout.addLayout(video_row)
         left_layout.addLayout(timer_row)
-        left_layout.addWidget(self.timer_widget)
+        left_layout.addLayout(timer_block_row)
         left_layout.addLayout(manual_score_grid)
         left_layout.addLayout(windows_row)
         left_layout.addWidget(QLabel("Текущий вопрос:"))
