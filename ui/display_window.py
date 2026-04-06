@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLabel, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtGui import QCloseEvent, QHideEvent, QShowEvent
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from models.question import Question
 from models.team import Team
@@ -17,6 +18,7 @@ class DisplayWindow(QWidget):
 
     public_wheel_finished = Signal()
     video_finished = Signal()
+    visibility_changed = Signal(bool)
 
     def __init__(self, parent=None) -> None:
         """
@@ -57,6 +59,7 @@ class DisplayWindow(QWidget):
         self.video_widget.hide()
 
         left_layout = QVBoxLayout()
+        left_layout.setSpacing(10)
         left_layout.addWidget(self.round_label)
         left_layout.addWidget(self.status_label)
         left_layout.addWidget(self.wheel, 4)
@@ -65,11 +68,14 @@ class DisplayWindow(QWidget):
         left_layout.addWidget(self.answer_label)
 
         right_layout = QVBoxLayout()
+        right_layout.setSpacing(14)
         right_layout.addWidget(self.timer_widget)
         right_layout.addWidget(self.scoreboard)
         right_layout.addStretch()
 
         main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(20)
         main_layout.addLayout(left_layout, 5)
         main_layout.addLayout(right_layout, 1)
 
@@ -177,3 +183,27 @@ class DisplayWindow(QWidget):
         self.video_widget.stop()
         self.video_widget.hide()
         self.wheel.show()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """
+        Emit visibility state on show.
+        Отправить состояние видимости при показе окна.
+        """
+        super().showEvent(event)
+        self.visibility_changed.emit(True)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """
+        Emit visibility state on hide.
+        Отправить состояние видимости при скрытии окна.
+        """
+        super().hideEvent(event)
+        self.visibility_changed.emit(False)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """
+        Stop playback before window closes.
+        Остановить воспроизведение перед закрытием окна.
+        """
+        self.stop_video()
+        super().closeEvent(event)

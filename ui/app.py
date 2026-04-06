@@ -5,6 +5,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QApplication
 
 from models.question import Question
+from models.round import Round
 from models.team import Team
 from services.game_service import GameService
 from ui.admin_window import AdminWindow
@@ -86,6 +87,8 @@ class GameController(QObject):
     timer_stopped = Signal()
     video_requested = Signal(dict)
     questions_changed = Signal()
+    teams_changed = Signal()
+    rounds_changed = Signal()
     active_team_changed = Signal(str)
     next_team_changed = Signal(str)
     round_progress_changed = Signal(str)
@@ -135,6 +138,18 @@ class GameController(QObject):
         """
         self.display_window = display_window
         self.video_state_changed.emit()
+
+    def _save_all(self) -> None:
+        """
+        Persist all current game entities.
+        Сохранить все текущие игровые сущности.
+        """
+        self.game.data_loader.save_all(
+            settings=self.game.settings,
+            teams=self.game.teams,
+            rounds=self.game.rounds,
+            questions=self.game.questions,
+        )
 
     def _build_round_team_order(self) -> list[Team]:
         """
@@ -371,13 +386,17 @@ class GameController(QObject):
         self.timer_stopped.emit()
         self.video_state_changed.emit()
 
-    def select_round(self, round_id: int) -> None:
+    def select_round(self, round_id: int | None) -> None:
         """
         Set current round manually from admin window.
         Установить текущий раунд вручную из окна администратора.
         """
         if round_id is None:
+            self.game.state.current_round_id = None
+            self.clear_active_question_state()
+            self.round_title_changed.emit("Раунд не выбран")
             self.status_changed.emit("Раунд не выбран.")
+            self._emit_round_runtime_info()
             return
 
         self.clear_active_question_state()
@@ -698,13 +717,7 @@ class GameController(QObject):
             )
         )
 
-        self.game.data_loader.save_all(
-            settings=self.game.settings,
-            teams=self.game.teams,
-            rounds=self.game.rounds,
-            questions=self.game.questions,
-        )
-
+        self._save_all()
         self.scoreboard_changed.emit(self.game.teams)
 
         self.current_question_resolved = True
@@ -754,12 +767,7 @@ class GameController(QObject):
         Persist current questions and related state.
         Сохранить текущее состояние вопросов и связанных данных.
         """
-        self.game.data_loader.save_all(
-            settings=self.game.settings,
-            teams=self.game.teams,
-            rounds=self.game.rounds,
-            questions=self.game.questions,
-        )
+        self._save_all()
         self.questions_changed.emit()
         self._emit_round_runtime_info()
 
@@ -810,13 +818,13 @@ class GameController(QObject):
 
     def set_question_used(self, question_id: int, used: bool) -> None:
         """
-        Manually set used flag for selected question.
-        Вручную установить флаг used для выбранного вопроса.
+        Update question used flag and persist changes.
+        Обновить флаг used вопроса и сохранить изменения.
         """
         self.game.question_service.set_used(question_id, used)
 
         if self.current_question is not None and self.current_question.id == question_id and not used:
-            self.clear_active_question_state()
+            self.current_question_resolved = False
 
         self.save_questions_state()
         state_text = "закрыт" if used else "открыт"
@@ -824,8 +832,8 @@ class GameController(QObject):
 
     def add_manual_points(self, team_id: int | None, points: int) -> None:
         """
-        Add manual bonus points to selected team.
-        Начислить вручную бонусные очки выбранной команде.
+        Add points to selected team manually.
+        Добавить очки выбранной команде вручную.
         """
         if team_id is None:
             self.status_changed.emit("Команда для начисления не выбрана.")
@@ -836,12 +844,7 @@ class GameController(QObject):
             return
 
         self.game.score_service.add_points(team_id, points)
-        self.game.data_loader.save_all(
-            settings=self.game.settings,
-            teams=self.game.teams,
-            rounds=self.game.rounds,
-            questions=self.game.questions,
-        )
+        self._save_all()
         self.scoreboard_changed.emit(self.game.teams)
 
         team = self.game.score_service.get_team_by_id(team_id)
@@ -851,8 +854,8 @@ class GameController(QObject):
 
     def remove_manual_points(self, team_id: int | None, points: int) -> None:
         """
-        Remove manual penalty points from selected team.
-        Списать вручную штрафные очки у выбранной команды.
+        Remove points from selected team manually.
+        Списать очки у выбранной команды вручную.
         """
         if team_id is None:
             self.status_changed.emit("Команда для списания не выбрана.")
@@ -863,12 +866,7 @@ class GameController(QObject):
             return
 
         self.game.score_service.remove_points(team_id, points)
-        self.game.data_loader.save_all(
-            settings=self.game.settings,
-            teams=self.game.teams,
-            rounds=self.game.rounds,
-            questions=self.game.questions,
-        )
+        self._save_all()
         self.scoreboard_changed.emit(self.game.teams)
 
         team = self.game.score_service.get_team_by_id(team_id)
@@ -944,6 +942,207 @@ class GameController(QObject):
         """
         return self.game.question_service.get_question_by_id(question_id)
 
+    def get_all_teams(self) -> list[Team]:
+        """
+        Return all teams.
+        Вернуть все команды.
+        """
+        return self.game.team_service.get_all()
+
+    def get_team_by_id(self, team_id: int) -> Team | None:
+        """
+        Return team by identifier.
+        Вернуть команду по идентификатору.
+        """
+        return self.game.team_service.get_by_id(team_id)
+
+    def reset_all_scores(self) -> None:
+        """
+        Reset scores of all teams to zero.
+        Сбросить очки всех команд до нуля.
+        """
+        for team in self.game.teams:
+            team.score = 0
+
+        self._save_all()
+        self.scoreboard_changed.emit(self.game.teams)
+        self.teams_changed.emit()
+        self.status_changed.emit("Очки всех команд сброшены.")
+
+    def add_team(self, name: str) -> None:
+        """
+        Create and store a new team.
+        Создать и сохранить новую команду.
+        """
+        normalized_name = (name or "").strip()
+        if not normalized_name:
+            self.status_changed.emit("Название команды не может быть пустым.")
+            return
+
+        if any(team.name.casefold() == normalized_name.casefold() for team in self.game.teams):
+            self.status_changed.emit("Команда с таким названием уже существует.")
+            return
+
+        team = Team(id=get_next_id(self.game.teams), name=normalized_name, score=0)
+        self.game.team_service.add_team(team)
+        self._save_all()
+
+        self.round_team_order = self._build_round_team_order()
+        self.round_turn_index = 0
+
+        self.scoreboard_changed.emit(self.game.teams)
+        self.teams_changed.emit()
+        self._emit_round_runtime_info()
+        self.status_changed.emit(f"Команда '{team.name}' добавлена.")
+
+    def update_team(self, team_id: int, name: str) -> None:
+        """
+        Update existing team name.
+        Обновить имя существующей команды.
+        """
+        normalized_name = (name or "").strip()
+        if not normalized_name:
+            self.status_changed.emit("Название команды не может быть пустым.")
+            return
+
+        if any(
+            team.id != team_id and team.name.casefold() == normalized_name.casefold()
+            for team in self.game.teams
+        ):
+            self.status_changed.emit("Команда с таким названием уже существует.")
+            return
+
+        team = self.game.team_service.update_team(team_id, normalized_name)
+        self._save_all()
+
+        self.round_team_order = self._build_round_team_order()
+        self.round_turn_index = 0
+
+        self.scoreboard_changed.emit(self.game.teams)
+        self.teams_changed.emit()
+        self._emit_round_runtime_info()
+        self.status_changed.emit(f"Команда #{team.id} обновлена.")
+
+    def delete_team(self, team_id: int) -> None:
+        """
+        Delete existing team.
+        Удалить существующую команду.
+        """
+        if self.current_question is not None and self.current_team_id == team_id:
+            self.status_changed.emit(
+                "Нельзя удалить команду, которая сейчас отвечает на активный вопрос."
+            )
+            return
+
+        removed_team = self.game.team_service.delete_team(team_id)
+        self._save_all()
+
+        self.round_team_order = self._build_round_team_order()
+        self.round_turn_index = 0
+
+        if self.current_team_id == team_id:
+            self.current_team_id = None
+            self.game.state.current_team_id = None
+
+        self.scoreboard_changed.emit(self.game.teams)
+        self.teams_changed.emit()
+        self._emit_round_runtime_info()
+        self.status_changed.emit(f"Команда '{removed_team.name}' удалена.")
+
+    def get_all_rounds(self) -> list[Round]:
+        """
+        Return all rounds.
+        Вернуть все раунды.
+        """
+        return self.game.round_service.get_all()
+
+    def get_round_by_id(self, round_id: int) -> Round | None:
+        """
+        Return round by identifier.
+        Вернуть раунд по идентификатору.
+        """
+        return self.game.round_service.get_by_id(round_id)
+
+    def add_round(self, name: str) -> None:
+        """
+        Create and store a new round.
+        Создать и сохранить новый раунд.
+        """
+        normalized_name = (name or "").strip()
+        if not normalized_name:
+            self.status_changed.emit("Название раунда не может быть пустым.")
+            return
+
+        if any(round_item.name.casefold() == normalized_name.casefold() for round_item in self.game.rounds):
+            self.status_changed.emit("Раунд с таким названием уже существует.")
+            return
+
+        round_item = Round(id=get_next_id(self.game.rounds), name=normalized_name)
+        self.game.round_service.add_round(round_item)
+        self._save_all()
+
+        self.rounds_changed.emit()
+        self.status_changed.emit(f"Раунд '{round_item.name}' добавлен.")
+
+        if self.game.state.current_round_id is None:
+            self.select_round(round_item.id)
+
+    def update_round(self, round_id: int, name: str) -> None:
+        """
+        Update existing round name.
+        Обновить имя существующего раунда.
+        """
+        normalized_name = (name or "").strip()
+        if not normalized_name:
+            self.status_changed.emit("Название раунда не может быть пустым.")
+            return
+
+        if any(
+            round_item.id != round_id and round_item.name.casefold() == normalized_name.casefold()
+            for round_item in self.game.rounds
+        ):
+            self.status_changed.emit("Раунд с таким названием уже существует.")
+            return
+
+        round_item = self.game.round_service.update_round(round_id, normalized_name)
+        self._save_all()
+
+        self.rounds_changed.emit()
+        if self.game.state.current_round_id == round_id:
+            self.round_title_changed.emit(round_item.name)
+        self.status_changed.emit(f"Раунд #{round_item.id} обновлен.")
+
+    def delete_round(self, round_id: int) -> None:
+        """
+        Delete existing round if it has no questions.
+        Удалить существующий раунд, если у него нет вопросов.
+        """
+        if self.current_question is not None and self.current_question.round_id == round_id:
+            self.status_changed.emit(
+                "Нельзя удалить раунд, в котором сейчас идет активный вопрос."
+            )
+            return
+
+        if self.game.question_service.get_questions_by_round(round_id):
+            self.status_changed.emit(
+                "Нельзя удалить раунд, пока в нем есть вопросы. Сначала удали или перенеси вопросы."
+            )
+            return
+
+        removed_round = self.game.round_service.delete_round(round_id)
+        self._save_all()
+
+        if self.game.state.current_round_id == round_id:
+            remaining_rounds = self.get_all_rounds()
+            if remaining_rounds:
+                self.select_round(remaining_rounds[0].id)
+            else:
+                self.select_round(None)
+
+        self.rounds_changed.emit()
+        self.status_changed.emit(f"Раунд '{removed_round.name}' удален.")
+
+
     def get_active_team_name(self) -> str:
         """
         Return active team display name.
@@ -967,17 +1166,17 @@ class GameController(QObject):
 
 def run_app() -> int:
     """
-    Create application and show both windows.
-    Создать приложение и показать оба окна.
+    Create application and initialize windows.
+    Создать приложение и инициализировать окна.
     """
     app = QApplication([])
     app.setStyleSheet(APP_STYLESHEET)
 
     controller = GameController(data_path="data/game_data.json")
-    admin_window = AdminWindow(controller=controller)
     display_window = DisplayWindow()
-
     controller.bind_display_window(display_window)
+
+    admin_window = AdminWindow(controller=controller)
 
     controller.scoreboard_changed.connect(display_window.update_scores)
     controller.round_title_changed.connect(display_window.set_round_title)
@@ -1009,8 +1208,11 @@ def run_app() -> int:
         first_round_id = controller.game.rounds[0].id
         controller.select_round(first_round_id)
         admin_window.round_combo.setCurrentIndex(0)
+    else:
+        controller.round_title_changed.emit("Раунды отсутствуют")
+        controller.status_changed.emit("Сначала добавь раунды и вопросы в настройках игры.")
 
     admin_window.show()
-    display_window.show()
+    display_window.hide()
 
     return app.exec()

@@ -1,12 +1,11 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
@@ -15,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from models.question import Question
 from models.team import Team
-from ui.question_editor_dialog import QuestionEditorDialog
+from ui.game_settings_window import GameSettingsWindow
 from ui.scoreboard_widget import ScoreboardWidget
 from ui.timer_widget import TimerWidget
 from ui.wheel_widget import WheelWidget
@@ -34,13 +33,13 @@ class AdminWindow(QWidget):
         """
         super().__init__(parent)
         self.controller = controller
+        self.settings_window: GameSettingsWindow | None = None
 
         self.setWindowTitle("Fortune Game - Admin")
         self.resize(1320, 900)
 
         self.round_combo = QComboBox()
-        for round_item in self.controller.game.rounds:
-            self.round_combo.addItem(round_item.name, round_item.id)
+        self._refresh_round_combo_items()
 
         self.select_round_button = QPushButton("Применить раунд")
         self.spin_button = QPushButton("Крутить колесо")
@@ -60,8 +59,7 @@ class AdminWindow(QWidget):
         self.round_progress_value = QLabel("Раунд не выбран")
 
         self.manual_score_team_combo = QComboBox()
-        for team in self.controller.game.teams:
-            self.manual_score_team_combo.addItem(team.name, team.id)
+        self._refresh_team_combo_items()
 
         self.manual_score_spin = QSpinBox()
         self.manual_score_spin.setRange(1, 100000)
@@ -70,26 +68,13 @@ class AdminWindow(QWidget):
         self.manual_add_points_button = QPushButton("Начислить очки")
         self.manual_remove_points_button = QPushButton("Списать очки")
 
-        self.question_filter_round_combo = QComboBox()
-        self.question_filter_round_combo.addItem("Все раунды", None)
-        for round_item in self.controller.game.rounds:
-            self.question_filter_round_combo.addItem(round_item.name, round_item.id)
-
-        self.question_select_combo = QComboBox()
-        self.question_used_checkbox = QCheckBox("Вопрос закрыт (used=True)")
-
-        self.refresh_questions_button = QPushButton("Обновить список")
-        self.save_question_state_button = QPushButton("Сохранить статус")
-        self.reset_current_question_button = QPushButton("Сбросить текущий")
-        self.reset_round_button = QPushButton("Сбросить раунд")
-        self.reset_all_button = QPushButton("Сбросить все")
-        self.add_question_button = QPushButton("Добавить вопрос")
-        self.edit_question_button = QPushButton("Изменить вопрос")
-        self.delete_question_button = QPushButton("Удалить вопрос")
+        self.settings_button = QPushButton("Настройки игры")
+        self.display_window_button = QPushButton("Показать игровое окно")
 
         self.wheel = WheelWidget()
         self.timer_widget = TimerWidget()
         self.scoreboard = ScoreboardWidget()
+        self.scoreboard.setMinimumWidth(220)
 
         self.question_text = QTextEdit()
         self.question_text.setReadOnly(True)
@@ -100,6 +85,8 @@ class AdminWindow(QWidget):
         self.status_label = QLabel("Готово")
         self.status_label.setAlignment(Qt.AlignCenter)
 
+        self._apply_local_styles()
+        self._apply_size_policies()
         self._build_layout()
         self._connect_events()
 
@@ -114,18 +101,144 @@ class AdminWindow(QWidget):
         self.controller.timer_paused.connect(self._on_timer_paused)
         self.controller.timer_started.connect(self._on_timer_started)
         self.controller.timer_stopped.connect(self._on_timer_stopped)
-        self.controller.questions_changed.connect(self.refresh_question_list)
         self.controller.active_team_changed.connect(self.current_team_value.setText)
         self.controller.next_team_changed.connect(self.next_team_value.setText)
         self.controller.round_progress_changed.connect(self.round_progress_value.setText)
         self.controller.video_state_changed.connect(self._update_video_button_state)
+        self.controller.teams_changed.connect(self._refresh_team_combo_items)
+        self.controller.rounds_changed.connect(self._refresh_round_combo_items)
 
         self.scoreboard.update_scores(self.controller.game.teams)
-        self.refresh_question_list()
         self.current_team_value.setText(self.controller.get_active_team_name())
         self.next_team_value.setText(self.controller.get_next_team_name())
         self._update_video_button_state()
         self._on_timer_stopped()
+        self._update_display_button_state(
+            self.controller.display_window is not None and self.controller.display_window.isVisible()
+        )
+
+    def _apply_local_styles(self) -> None:
+        """
+        Apply local styles for action buttons in admin window.
+        Применить локальные стили для action-кнопок в окне администратора.
+        """
+        self.setStyleSheet(
+            """
+            QPushButton#spinButton,
+            QPushButton#timerStartButton,
+            QPushButton#correctButton,
+            QPushButton#manualAddPointsButton {
+                border: 2px solid #4f7a67;
+                color: #ffffff;
+                background-color: #505050;
+            }
+
+            QPushButton#spinButton:hover,
+            QPushButton#timerStartButton:hover,
+            QPushButton#correctButton:hover,
+            QPushButton#manualAddPointsButton:hover {
+                border: 2px solid #6a9a84;
+                background-color: #5a5a5a;
+            }
+
+            QPushButton#spinButton:pressed,
+            QPushButton#timerStartButton:pressed,
+            QPushButton#correctButton:pressed,
+            QPushButton#manualAddPointsButton:pressed {
+                border: 2px solid #3f6555;
+                background-color: #454545;
+            }
+
+            QPushButton#timerPauseButton {
+                border: 2px solid #9a7448;
+                color: #ffffff;
+                background-color: #505050;
+            }
+
+            QPushButton#timerPauseButton:hover {
+                border: 2px solid #b38857;
+                background-color: #5a5a5a;
+            }
+
+            QPushButton#timerPauseButton:pressed {
+                border: 2px solid #7f5f3d;
+                background-color: #454545;
+            }
+
+            QPushButton#wrongButton,
+            QPushButton#timerStopButton,
+            QPushButton#manualRemovePointsButton {
+                border: 2px solid #8a4f56;
+                color: #ffffff;
+                background-color: #505050;
+            }
+
+            QPushButton#wrongButton:hover,
+            QPushButton#timerStopButton:hover,
+            QPushButton#manualRemovePointsButton:hover {
+                border: 2px solid #a8656d;
+                background-color: #5a5a5a;
+            }
+
+            QPushButton#wrongButton:pressed,
+            QPushButton#timerStopButton:pressed,
+            QPushButton#manualRemovePointsButton:pressed {
+                border: 2px solid #6f4046;
+                background-color: #454545;
+            }
+
+            QPushButton#settingsButton,
+            QPushButton#displayWindowButton {
+                border: 2px solid #4d6481;
+                color: #ffffff;
+                background-color: #505050;
+            }
+
+            QPushButton#settingsButton:hover,
+            QPushButton#displayWindowButton:hover {
+                border: 2px solid #637d9c;
+                background-color: #5a5a5a;
+            }
+
+            QPushButton#settingsButton:pressed,
+            QPushButton#displayWindowButton:pressed {
+                border: 2px solid #3f526a;
+                background-color: #454545;
+            }
+            """
+        )
+
+        self.spin_button.setObjectName("spinButton")
+        self.correct_button.setObjectName("correctButton")
+        self.wrong_button.setObjectName("wrongButton")
+
+        self.timer_start_button.setObjectName("timerStartButton")
+        self.timer_pause_resume_button.setObjectName("timerPauseButton")
+        self.timer_stop_button.setObjectName("timerStopButton")
+
+        self.manual_add_points_button.setObjectName("manualAddPointsButton")
+        self.manual_remove_points_button.setObjectName("manualRemovePointsButton")
+
+        self.settings_button.setObjectName("settingsButton")
+        self.display_window_button.setObjectName("displayWindowButton")
+
+    def _apply_size_policies(self) -> None:
+        """
+        Apply size policies and unified heights for key buttons.
+        Применить size policy и единую высоту для ключевых кнопок.
+        """
+        uniform_height = 34
+
+        buttons_to_normalize = [
+            self.manual_add_points_button,
+            self.manual_remove_points_button,
+            self.settings_button,
+            self.display_window_button,
+        ]
+
+        for button in buttons_to_normalize:
+            button.setMinimumHeight(uniform_height)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
     def _build_layout(self) -> None:
         """
@@ -133,6 +246,9 @@ class AdminWindow(QWidget):
         Построить компоновку виджетов.
         """
         top_controls = QGridLayout()
+        top_controls.setHorizontalSpacing(8)
+        top_controls.setVerticalSpacing(8)
+
         top_controls.addWidget(QLabel("Раунд:"), 0, 0)
         top_controls.addWidget(self.round_combo, 0, 1)
         top_controls.addWidget(self.select_round_button, 0, 2)
@@ -146,7 +262,13 @@ class AdminWindow(QWidget):
         top_controls.addWidget(QLabel("Прогресс раунда:"), 2, 0)
         top_controls.addWidget(self.round_progress_value, 2, 1, 1, 3)
 
+        top_section = QHBoxLayout()
+        top_section.setSpacing(14)
+        top_section.addLayout(top_controls, 5)
+        top_section.addWidget(self.scoreboard, 1, Qt.AlignTop)
+
         button_row = QHBoxLayout()
+        button_row.setSpacing(8)
         button_row.addWidget(self.repeat_button)
         button_row.addWidget(self.show_answer_button)
         button_row.addWidget(self.correct_button)
@@ -156,11 +278,15 @@ class AdminWindow(QWidget):
         video_row.addWidget(self.video_pause_resume_button, 1)
 
         timer_row = QHBoxLayout()
+        timer_row.setSpacing(8)
         timer_row.addWidget(self.timer_start_button)
         timer_row.addWidget(self.timer_pause_resume_button)
         timer_row.addWidget(self.timer_stop_button)
 
         manual_score_grid = QGridLayout()
+        manual_score_grid.setHorizontalSpacing(10)
+        manual_score_grid.setVerticalSpacing(8)
+
         manual_score_grid.addWidget(QLabel("Ручная корректировка счета:"), 0, 0, 1, 3)
         manual_score_grid.addWidget(QLabel("Команда:"), 1, 0)
         manual_score_grid.addWidget(self.manual_score_team_combo, 1, 1, 1, 2)
@@ -168,50 +294,34 @@ class AdminWindow(QWidget):
         manual_score_grid.addWidget(QLabel("Очки:"), 2, 0)
         manual_score_grid.addWidget(self.manual_score_spin, 2, 1, 1, 2)
 
-        manual_score_grid.addWidget(self.manual_add_points_button, 3, 1)
-        manual_score_grid.addWidget(self.manual_remove_points_button, 3, 2)
+        manual_buttons_row = QHBoxLayout()
+        manual_buttons_row.setSpacing(8)
+        manual_buttons_row.addWidget(self.manual_add_points_button, 1)
+        manual_buttons_row.addWidget(self.manual_remove_points_button, 1)
+        manual_score_grid.addLayout(manual_buttons_row, 3, 0, 1, 3)
 
-        questions_manage_grid = QGridLayout()
-        questions_manage_grid.addWidget(QLabel("Фильтр по раунду:"), 0, 0)
-        questions_manage_grid.addWidget(self.question_filter_round_combo, 0, 1)
-        questions_manage_grid.addWidget(self.refresh_questions_button, 0, 2)
-
-        questions_manage_grid.addWidget(QLabel("Вопрос:"), 1, 0)
-        questions_manage_grid.addWidget(self.question_select_combo, 1, 1, 1, 2)
-
-        questions_manage_grid.addWidget(self.question_used_checkbox, 2, 0, 1, 3)
-
-        questions_manage_grid.addWidget(self.save_question_state_button, 3, 0)
-        questions_manage_grid.addWidget(self.reset_current_question_button, 3, 1)
-        questions_manage_grid.addWidget(self.reset_round_button, 3, 2)
-
-        questions_manage_grid.addWidget(self.edit_question_button, 4, 0)
-        questions_manage_grid.addWidget(self.delete_question_button, 4, 1)
-        questions_manage_grid.addWidget(self.add_question_button, 4, 2)
-
-        questions_manage_grid.addWidget(self.reset_all_button, 5, 0, 1, 3)
+        windows_row = QHBoxLayout()
+        windows_row.setSpacing(8)
+        windows_row.addWidget(self.settings_button, 1)
+        windows_row.addWidget(self.display_window_button, 1)
 
         left_layout = QVBoxLayout()
-        left_layout.addLayout(top_controls)
+        left_layout.setSpacing(10)
+        left_layout.addLayout(top_section)
         left_layout.addWidget(self.wheel, 4)
         left_layout.addLayout(button_row)
         left_layout.addLayout(video_row)
         left_layout.addLayout(timer_row)
         left_layout.addWidget(self.timer_widget)
         left_layout.addLayout(manual_score_grid)
-        left_layout.addWidget(QLabel("Управление вопросами:"))
-        left_layout.addLayout(questions_manage_grid)
+        left_layout.addLayout(windows_row)
         left_layout.addWidget(QLabel("Текущий вопрос:"))
         left_layout.addWidget(self.question_text, 2)
         left_layout.addWidget(QLabel("Ответ:"))
         left_layout.addWidget(self.answer_text, 1)
         left_layout.addWidget(self.status_label)
 
-        main_layout = QHBoxLayout()
-        main_layout.addLayout(left_layout, 4)
-        main_layout.addWidget(self.scoreboard, 1)
-
-        self.setLayout(main_layout)
+        self.setLayout(left_layout)
 
     def _connect_events(self) -> None:
         """
@@ -233,16 +343,8 @@ class AdminWindow(QWidget):
         self.manual_add_points_button.clicked.connect(self._add_manual_points)
         self.manual_remove_points_button.clicked.connect(self._remove_manual_points)
 
-        self.refresh_questions_button.clicked.connect(self.refresh_question_list)
-        self.question_filter_round_combo.currentIndexChanged.connect(self.refresh_question_list)
-        self.question_select_combo.currentIndexChanged.connect(self._on_selected_question_changed)
-        self.save_question_state_button.clicked.connect(self._save_question_used_state)
-        self.reset_current_question_button.clicked.connect(self._reset_current_question)
-        self.reset_round_button.clicked.connect(self._reset_round_questions)
-        self.reset_all_button.clicked.connect(self.controller.reset_all_questions)
-        self.add_question_button.clicked.connect(self._open_add_question_dialog)
-        self.edit_question_button.clicked.connect(self._open_edit_question_dialog)
-        self.delete_question_button.clicked.connect(self._delete_selected_question)
+        self.settings_button.clicked.connect(self._toggle_settings_window)
+        self.display_window_button.clicked.connect(self._toggle_display_window)
 
     def _select_round(self) -> None:
         """
@@ -364,197 +466,110 @@ class AdminWindow(QWidget):
         points = self.manual_score_spin.value()
         self.controller.remove_manual_points(team_id=team_id, points=points)
 
-    def refresh_question_list(self) -> None:
+    def _toggle_settings_window(self) -> None:
         """
-        Rebuild question selection list.
-        Пересобрать список выбора вопросов.
+        Open or close settings window in a single instance.
+        Открыть или закрыть окно настроек в единственном экземпляре.
         """
-        current_id = self.question_select_combo.currentData()
-        round_id = self.question_filter_round_combo.currentData()
+        if self.settings_window is None:
+            self.settings_window = GameSettingsWindow(controller=self.controller)
+            self.settings_window.visibility_changed.connect(self._update_settings_button_state)
 
-        self.question_select_combo.blockSignals(True)
-        self.question_select_combo.clear()
-
-        questions = self.controller.get_questions_for_round(round_id)
-
-        for question in questions:
-            used_mark = "закрыт" if question.used else "открыт"
-            media_mark = " [VIDEO]" if question.media_type == "video" else ""
-            short_text = question.text[:60].replace("\n", " ")
-            self.question_select_combo.addItem(
-                f"#{question.id} [{used_mark}] {short_text}{media_mark}",
-                question.id,
-            )
-
-        if questions:
-            target_index = 0
-            if current_id is not None:
-                for index in range(self.question_select_combo.count()):
-                    if self.question_select_combo.itemData(index) == current_id:
-                        target_index = index
-                        break
-            self.question_select_combo.setCurrentIndex(target_index)
+        if self.settings_window.isVisible():
+            self.settings_window.close()
         else:
-            self.question_text.clear()
-            self.answer_text.clear()
-            self.question_used_checkbox.setChecked(False)
+            self.settings_window.refresh_all()
+            self.settings_window.show()
+            self.settings_window.raise_()
+            self.settings_window.activateWindow()
 
-        self.question_select_combo.blockSignals(False)
-        self._sync_selected_question_state()
-        self._sync_selected_question_preview()
-
-    def _on_selected_question_changed(self) -> None:
+    def _toggle_display_window(self) -> None:
         """
-        Handle question selection change.
-        Обработать смену выбранного вопроса.
+        Show or hide bound display window.
+        Показать или скрыть привязанное игровое окно.
         """
-        self._sync_selected_question_state()
-        self._sync_selected_question_preview()
-
-    def _sync_selected_question_state(self) -> None:
-        """
-        Sync checkbox state with selected question.
-        Синхронизировать чекбокс со статусом выбранного вопроса.
-        """
-        question_id = self.question_select_combo.currentData()
-        if question_id is None:
-            self.question_used_checkbox.setChecked(False)
+        display_window = self.controller.display_window
+        if display_window is None:
+            self.status_label.setText("Игровое окно не привязано к контроллеру.")
             return
 
-        question = self.controller.get_question_by_id(question_id)
-        if question is None:
-            self.question_used_checkbox.setChecked(False)
+        if not hasattr(display_window, "_admin_visibility_connected"):
+            display_window.visibility_changed.connect(self._update_display_button_state)
+            display_window._admin_visibility_connected = True
+
+        if display_window.isVisible():
+            display_window.close()
+        else:
+            display_window.show()
+            display_window.raise_()
+            display_window.activateWindow()
+
+    def _update_settings_button_state(self, is_visible: bool) -> None:
+        """
+        Reflect settings window visibility on button text.
+        Отразить видимость окна настроек в тексте кнопки.
+        """
+        if is_visible:
+            self.settings_button.setText("Закрыть настройки")
+        else:
+            self.settings_button.setText("Настройки игры")
+
+    def _update_display_button_state(self, is_visible: bool) -> None:
+        """
+        Reflect display window visibility on button text.
+        Отразить видимость игрового окна в тексте кнопки.
+        """
+        if is_visible:
+            self.display_window_button.setText("Скрыть игровое окно")
+        else:
+            self.display_window_button.setText("Показать игровое окно")
+
+    def _refresh_team_combo_items(self) -> None:
+        """
+        Refresh manual score teams combo preserving selection.
+        Обновить комбобокс команд для ручного счета с сохранением выбора.
+        """
+        current_team_id = self.manual_score_team_combo.currentData()
+
+        self.manual_score_team_combo.blockSignals(True)
+        self.manual_score_team_combo.clear()
+        for team in self.controller.get_all_teams():
+            self.manual_score_team_combo.addItem(team.name, team.id)
+
+        self._restore_combo_selection(self.manual_score_team_combo, current_team_id)
+        self.manual_score_team_combo.blockSignals(False)
+
+    def _refresh_round_combo_items(self) -> None:
+        """
+        Refresh rounds combo preserving selection.
+        Обновить комбобокс раундов с сохранением выбора.
+        """
+        current_round_id = self.round_combo.currentData()
+
+        self.round_combo.blockSignals(True)
+        self.round_combo.clear()
+        for round_item in self.controller.get_all_rounds():
+            self.round_combo.addItem(round_item.name, round_item.id)
+
+        self._restore_combo_selection(self.round_combo, current_round_id)
+        self.round_combo.blockSignals(False)
+
+    @staticmethod
+    def _restore_combo_selection(combo: QComboBox, target_data) -> None:
+        """
+        Restore combo selection by data value.
+        Восстановить выбор комбобокса по data-значению.
+        """
+        if combo.count() <= 0:
             return
 
-        self.question_used_checkbox.setChecked(question.used)
-
-    def _sync_selected_question_preview(self) -> None:
-        """
-        Sync question and answer preview with selected question.
-        Синхронизировать предпросмотр вопроса и ответа с выбранным вопросом.
-        """
-        question_id = self.question_select_combo.currentData()
-        if question_id is None:
-            self.question_text.clear()
-            self.answer_text.clear()
+        if target_data is None:
+            combo.setCurrentIndex(0)
             return
 
-        question = self.controller.get_question_by_id(question_id)
-        if question is None:
-            self.question_text.clear()
-            self.answer_text.clear()
-            return
+        for index in range(combo.count()):
+            if combo.itemData(index) == target_data:
+                combo.setCurrentIndex(index)
+                return
 
-        self.question_text.setPlainText(question.text)
-        self.answer_text.setPlainText(question.answer or "")
-
-    def _save_question_used_state(self) -> None:
-        """
-        Save used state for selected question.
-        Сохранить состояние used для выбранного вопроса.
-        """
-        question_id = self.question_select_combo.currentData()
-        if question_id is None:
-            self.status_label.setText("Вопрос не выбран.")
-            return
-
-        self.controller.set_question_used(
-            question_id=question_id,
-            used=self.question_used_checkbox.isChecked(),
-        )
-
-    def _reset_current_question(self) -> None:
-        """
-        Reset currently selected question.
-        Сбросить текущий выбранный вопрос.
-        """
-        question_id = self.question_select_combo.currentData()
-        if question_id is None:
-            self.status_label.setText("Вопрос не выбран.")
-            return
-
-        self.controller.reset_current_question(question_id)
-
-    def _reset_round_questions(self) -> None:
-        """
-        Reset all questions in selected filter round.
-        Сбросить все вопросы выбранного в фильтре раунда.
-        """
-        round_id = self.question_filter_round_combo.currentData()
-        if round_id is None:
-            self.status_label.setText("Для сброса раунда выбери конкретный раунд в фильтре.")
-            return
-
-        self.controller.reset_round_questions(round_id)
-
-    def _open_add_question_dialog(self) -> None:
-        """
-        Open dialog for adding a new question.
-        Открыть диалог добавления нового вопроса.
-        """
-        dialog = QuestionEditorDialog(
-            rounds=self.controller.game.rounds,
-            parent=self,
-        )
-
-        if dialog.exec():
-            payload = dialog.get_payload()
-            self.controller.add_question(payload)
-
-    def _open_edit_question_dialog(self) -> None:
-        """
-        Open dialog for editing selected question.
-        Открыть диалог редактирования выбранного вопроса.
-        """
-        question_id = self.question_select_combo.currentData()
-        if question_id is None:
-            self.status_label.setText("Вопрос не выбран.")
-            return
-
-        question = self.controller.get_question_by_id(question_id)
-        if question is None:
-            self.status_label.setText("Выбранный вопрос не найден.")
-            return
-
-        dialog = QuestionEditorDialog(
-            rounds=self.controller.game.rounds,
-            question=question,
-            parent=self,
-        )
-
-        if dialog.exec():
-            payload = dialog.get_payload()
-            self.controller.update_question(question_id, payload)
-
-    def _delete_selected_question(self) -> None:
-        """
-        Delete selected question after confirmation.
-        Удалить выбранный вопрос после подтверждения.
-        """
-        question_id = self.question_select_combo.currentData()
-        if question_id is None:
-            self.status_label.setText("Вопрос не выбран.")
-            return
-
-        question = self.controller.get_question_by_id(question_id)
-        if question is None:
-            self.status_label.setText("Выбранный вопрос не найден.")
-            return
-
-        short_text = question.text[:120].replace("\n", " ")
-        reply = QMessageBox.question(
-            self,
-            "Подтверждение удаления",
-            (
-                f"Удалить вопрос #{question.id}?\n\n"
-                f"{short_text}\n\n"
-                "Это действие нельзя отменить."
-            ),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-
-        if reply != QMessageBox.Yes:
-            return
-
-        self.controller.delete_question(question_id)
+        combo.setCurrentIndex(0)

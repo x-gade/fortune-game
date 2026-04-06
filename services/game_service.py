@@ -7,10 +7,12 @@ from models.question import Question
 from models.team import Team
 from services.data_loader import DataLoader
 from services.question_service import QuestionService
+from services.round_service import RoundService
 from services.score_service import ScoreService
+from services.team_service import TeamService
 from services.timer_service import TimerService
 from services.wheel_service import WheelService
-from utils.formatters import format_scoreboard, format_question_card
+from utils.formatters import format_question_card, format_scoreboard
 
 
 class GameService:
@@ -34,6 +36,8 @@ class GameService:
             default_timer_seconds=default_timer,
         )
         self.score_service = ScoreService(self.teams)
+        self.team_service = TeamService(self.teams)
+        self.round_service = RoundService(self.rounds)
         self.timer_service = TimerService()
         self.wheel_service = WheelService()
         self.state = GameState()
@@ -293,43 +297,17 @@ class GameService:
             print(f"Осталось вопросов: {remaining_questions}")
 
             active_team = self._get_active_team()
-            next_team = self._get_next_team()
-
             if active_team is not None:
                 print(f"Сейчас отвечает: {active_team.name}")
+
+            next_team = self._get_next_team()
             if next_team is not None:
                 print(f"Следующая команда: {next_team.name}")
 
-            raw_value = input(
-                "\nНажмите Enter, чтобы крутить колесо, "
-                "или введите q для выхода в меню раундов: "
-            ).strip().lower()
-
-            if raw_value == "q":
-                print("Выход из текущего раунда.")
+            if not self.play_turn(round_id):
                 break
 
-            played = self.play_turn(round_id=round_id)
-            if not played:
+            raw_continue = input("\nПродолжить раунд? [Enter/y = да, n = выход]: ").strip().lower()
+            if raw_continue == "n":
+                print("Раунд остановлен пользователем.")
                 break
-
-        print(f"\n=== РАУНД ЗАВЕРШЕН: {round_name} ===")
-
-    def run(self) -> None:
-        """
-        Start main console game loop.
-        Запустить основной консольный игровой цикл.
-        """
-        print("Fortune Game MVP запущен.")
-
-        while True:
-            print("\n==============================")
-            print(format_scoreboard(self.teams))
-            print("==============================")
-
-            round_id = self.choose_round()
-            if round_id is None:
-                print("Выход из игры.")
-                break
-
-            self.run_round(round_id=round_id)
