@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -36,7 +38,7 @@ class AdminWindow(QWidget):
         self.settings_window: GameSettingsWindow | None = None
 
         self.setWindowTitle("Fortune Game - Admin")
-        self.resize(1320, 900)
+        self.resize(1480, 920)
 
         self.round_combo = QComboBox()
         self._refresh_round_combo_items()
@@ -53,6 +55,18 @@ class AdminWindow(QWidget):
         self.timer_start_button = QPushButton("Старт таймера")
         self.timer_pause_resume_button = QPushButton("Пауза таймера")
         self.timer_stop_button = QPushButton("Стоп таймера")
+
+        self.extra_time_plus_10_button = QPushButton("+10 сек")
+        self.extra_time_plus_15_button = QPushButton("+15 сек")
+        self.extra_time_plus_30_button = QPushButton("+30 сек")
+        self.extra_time_plus_60_button = QPushButton("+1 мин")
+
+        self.extra_time_buttons_map = {
+            10: self.extra_time_plus_10_button,
+            15: self.extra_time_plus_15_button,
+            30: self.extra_time_plus_30_button,
+            60: self.extra_time_plus_60_button,
+        }
 
         self.current_team_value = QLabel("Нет активной команды")
         self.next_team_value = QLabel("Нет следующей команды")
@@ -74,12 +88,45 @@ class AdminWindow(QWidget):
         self.wheel = WheelWidget()
 
         self.timer_widget = TimerWidget()
-        self.timer_widget.setMinimumWidth(440)
+        self.timer_widget.setMinimumWidth(420)
         self.timer_widget.setMaximumWidth(520)
         self.timer_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.scoreboard = ScoreboardWidget()
-        self.scoreboard.setMinimumWidth(220)
+        self.scoreboard.setMinimumWidth(260)
+        self.scoreboard.setMaximumWidth(320)
+
+        self.extra_time_status_title = QLabel("Состояние допвремени")
+        self.extra_time_status_title.setStyleSheet("font-size: 16px; font-weight: 700;")
+
+        self.extra_time_status_value = QLabel("Нет данных")
+        self.extra_time_status_value.setWordWrap(True)
+        self.extra_time_status_value.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.extra_time_status_value.setStyleSheet(
+            """
+            background-color: #2f2f2f;
+            border: 1px solid #666666;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            """
+        )
+
+        self.current_award_title = QLabel("Текущая награда")
+        self.current_award_title.setStyleSheet("font-size: 16px; font-weight: 700;")
+
+        self.current_award_value = QLabel("Нет активного вопроса")
+        self.current_award_value.setWordWrap(True)
+        self.current_award_value.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.current_award_value.setStyleSheet(
+            """
+            background-color: #2f2f2f;
+            border: 1px solid #666666;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            """
+        )
 
         self.question_text = QTextEdit()
         self.question_text.setReadOnly(True)
@@ -112,6 +159,7 @@ class AdminWindow(QWidget):
         self.controller.video_state_changed.connect(self._update_video_button_state)
         self.controller.teams_changed.connect(self._refresh_team_combo_items)
         self.controller.rounds_changed.connect(self._refresh_round_combo_items)
+        self.controller.extra_time_state_changed.connect(self._update_extra_time_state)
 
         self.scoreboard.update_scores(self.controller.game.teams)
         self.current_team_value.setText(self.controller.get_active_team_name())
@@ -121,6 +169,7 @@ class AdminWindow(QWidget):
         self._update_display_button_state(
             self.controller.display_window is not None and self.controller.display_window.isVisible()
         )
+        self._update_extra_time_state({})
 
     def _apply_local_styles(self) -> None:
         """
@@ -239,6 +288,10 @@ class AdminWindow(QWidget):
             self.manual_remove_points_button,
             self.settings_button,
             self.display_window_button,
+            self.extra_time_plus_10_button,
+            self.extra_time_plus_15_button,
+            self.extra_time_plus_30_button,
+            self.extra_time_plus_60_button,
         ]
 
         for button in buttons_to_normalize:
@@ -267,11 +320,6 @@ class AdminWindow(QWidget):
         top_controls.addWidget(QLabel("Прогресс раунда:"), 2, 0)
         top_controls.addWidget(self.round_progress_value, 2, 1, 1, 3)
 
-        top_section = QHBoxLayout()
-        top_section.setSpacing(14)
-        top_section.addLayout(top_controls, 5)
-        top_section.addWidget(self.scoreboard, 1, Qt.AlignTop)
-
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
         button_row.addWidget(self.repeat_button)
@@ -282,11 +330,11 @@ class AdminWindow(QWidget):
         video_row = QHBoxLayout()
         video_row.addWidget(self.video_pause_resume_button, 1)
 
-        timer_row = QHBoxLayout()
-        timer_row.setSpacing(8)
-        timer_row.addWidget(self.timer_start_button)
-        timer_row.addWidget(self.timer_pause_resume_button)
-        timer_row.addWidget(self.timer_stop_button)
+        timer_controls_row = QHBoxLayout()
+        timer_controls_row.setSpacing(8)
+        timer_controls_row.addWidget(self.timer_start_button)
+        timer_controls_row.addWidget(self.timer_pause_resume_button)
+        timer_controls_row.addWidget(self.timer_stop_button)
 
         manual_score_grid = QGridLayout()
         manual_score_grid.setHorizontalSpacing(10)
@@ -310,19 +358,21 @@ class AdminWindow(QWidget):
         windows_row.addWidget(self.settings_button, 1)
         windows_row.addWidget(self.display_window_button, 1)
 
-        timer_block_row = QHBoxLayout()
-        timer_block_row.addStretch()
-        timer_block_row.addWidget(self.timer_widget)
-        timer_block_row.addStretch()
+        extra_time_buttons_grid = QGridLayout()
+        extra_time_buttons_grid.setHorizontalSpacing(8)
+        extra_time_buttons_grid.setVerticalSpacing(8)
+        extra_time_buttons_grid.addWidget(self.extra_time_plus_10_button, 0, 0)
+        extra_time_buttons_grid.addWidget(self.extra_time_plus_15_button, 0, 1)
+        extra_time_buttons_grid.addWidget(self.extra_time_plus_30_button, 1, 0)
+        extra_time_buttons_grid.addWidget(self.extra_time_plus_60_button, 1, 1)
 
         left_layout = QVBoxLayout()
         left_layout.setSpacing(10)
-        left_layout.addLayout(top_section)
+        left_layout.addLayout(top_controls)
         left_layout.addWidget(self.wheel, 4)
         left_layout.addLayout(button_row)
         left_layout.addLayout(video_row)
-        left_layout.addLayout(timer_row)
-        left_layout.addLayout(timer_block_row)
+        left_layout.addLayout(timer_controls_row)
         left_layout.addLayout(manual_score_grid)
         left_layout.addLayout(windows_row)
         left_layout.addWidget(QLabel("Текущий вопрос:"))
@@ -331,7 +381,25 @@ class AdminWindow(QWidget):
         left_layout.addWidget(self.answer_text, 1)
         left_layout.addWidget(self.status_label)
 
-        self.setLayout(left_layout)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(10)
+        right_layout.addWidget(self.scoreboard, 0, Qt.AlignTop)
+        right_layout.addWidget(self.extra_time_status_title)
+        right_layout.addWidget(self.extra_time_status_value)
+        right_layout.addWidget(self.timer_widget, 0, Qt.AlignTop)
+        right_layout.addWidget(self.current_award_title)
+        right_layout.addWidget(self.current_award_value)
+        right_layout.addWidget(QLabel("Добавить время активной команде:"))
+        right_layout.addLayout(extra_time_buttons_grid)
+        right_layout.addStretch()
+
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(16)
+        main_layout.addLayout(left_layout, 5)
+        main_layout.addLayout(right_layout, 2)
+
+        self.setLayout(main_layout)
 
     def _connect_events(self) -> None:
         """
@@ -349,6 +417,11 @@ class AdminWindow(QWidget):
         self.timer_start_button.clicked.connect(self.controller.start_timer)
         self.timer_pause_resume_button.clicked.connect(self._toggle_timer_pause_resume)
         self.timer_stop_button.clicked.connect(self.controller.stop_timer)
+
+        self.extra_time_plus_10_button.clicked.connect(lambda: self.controller.apply_extra_time(10))
+        self.extra_time_plus_15_button.clicked.connect(lambda: self.controller.apply_extra_time(15))
+        self.extra_time_plus_30_button.clicked.connect(lambda: self.controller.apply_extra_time(30))
+        self.extra_time_plus_60_button.clicked.connect(lambda: self.controller.apply_extra_time(60))
 
         self.manual_add_points_button.clicked.connect(self._add_manual_points)
         self.manual_remove_points_button.clicked.connect(self._remove_manual_points)
@@ -563,6 +636,136 @@ class AdminWindow(QWidget):
 
         self._restore_combo_selection(self.round_combo, current_round_id)
         self.round_combo.blockSignals(False)
+
+    def _set_extra_time_button_style(
+        self,
+        button: QPushButton,
+        *,
+        is_selected: bool,
+        is_available: bool,
+    ) -> None:
+        """
+        Apply visual style for extra-time button.
+        Применить визуальный стиль для кнопки допвремени.
+        """
+        if is_selected:
+            border_color = "#c74d5f"
+            background_color = "#4f3035"
+        elif is_available:
+            border_color = "#4d7fd1"
+            background_color = "#334154"
+        else:
+            border_color = "#7a7a7a"
+            background_color = "#4a4a4a"
+
+        button.setStyleSheet(
+            f"""
+            QPushButton {{
+                border: 2px solid {border_color};
+                background-color: {background_color};
+                color: #ffffff;
+                border-radius: 8px;
+                padding: 6px 10px;
+                font-weight: 700;
+            }}
+            QPushButton:hover {{
+                background-color: {background_color};
+            }}
+            QPushButton:pressed {{
+                background-color: {background_color};
+            }}
+            """
+        )
+
+    def _update_extra_time_state(self, payload: dict) -> None:
+        """
+        Update extra-time UI state.
+        Обновить UI-состояние допвремени.
+        """
+        if not payload:
+            for seconds, button in self.extra_time_buttons_map.items():
+                button.setEnabled(False)
+                self._set_extra_time_button_style(button, is_selected=False, is_available=False)
+
+            self.extra_time_status_value.setText("Раунд не выбран.\nДополнительное время недоступно.")
+            self.current_award_value.setText("Нет активного вопроса")
+            return
+
+        active_team_id = payload.get("active_team_id")
+        selected_bonus_seconds = payload.get("selected_bonus_seconds", 0)
+        time_expired = payload.get("time_expired", False)
+        base_points = payload.get("base_points", 0)
+        award_points = payload.get("award_points", 0)
+        award_percent = payload.get("award_percent", 0)
+
+        active_team_usage = None
+        lines = []
+
+        for team_state in payload.get("team_states", []):
+            team_name = team_state.get("team_name", "Команда")
+            used = team_state.get("used", False)
+            bonus_seconds = team_state.get("bonus_seconds", 0)
+            penalty_percent = team_state.get("penalty_percent", 0)
+            is_active = team_state.get("is_active", False)
+
+            prefix = "•"
+            if is_active:
+                prefix = "▶"
+
+            if used:
+                line = (
+                    f"{prefix} {team_name}: использовано +{bonus_seconds} сек, "
+                    f"награда {100 - penalty_percent}%"
+                )
+            else:
+                line = f"{prefix} {team_name}: не использовано"
+
+            lines.append(line)
+
+            if team_state.get("team_id") == active_team_id:
+                active_team_usage = team_state
+
+        self.extra_time_status_value.setText("\n".join(lines) if lines else "Нет команд.")
+
+        if time_expired:
+            self.current_award_value.setText(
+                f"Базовая награда: {base_points}\n"
+                f"Текущая награда: {award_points}\n"
+                f"Причина: время вышло, доступно только 5%."
+            )
+        elif base_points > 0:
+            if selected_bonus_seconds > 0:
+                self.current_award_value.setText(
+                    f"Базовая награда: {base_points}\n"
+                    f"Текущая награда: {award_points}\n"
+                    f"Причина: +{selected_bonus_seconds} сек, награда {award_percent}%."
+                )
+            else:
+                self.current_award_value.setText(
+                    f"Базовая награда: {base_points}\n"
+                    f"Текущая награда: {award_points}\n"
+                    f"Причина: без штрафа, награда 100%."
+                )
+        else:
+            self.current_award_value.setText("Нет активного вопроса")
+
+        team_already_used = bool(active_team_usage and active_team_usage.get("used", False))
+
+        for seconds, button in self.extra_time_buttons_map.items():
+            is_selected = selected_bonus_seconds == seconds
+            is_available = (
+                active_team_id is not None
+                and not time_expired
+                and base_points > 0
+                and (not team_already_used or is_selected)
+            )
+
+            button.setEnabled(is_available and not team_already_used or is_selected)
+            self._set_extra_time_button_style(
+                button,
+                is_selected=is_selected,
+                is_available=is_available,
+            )
 
     @staticmethod
     def _restore_combo_selection(combo: QComboBox, target_data) -> None:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
@@ -93,9 +95,19 @@ class GameController(QObject):
     next_team_changed = Signal(str)
     round_progress_changed = Signal(str)
     video_state_changed = Signal()
+    extra_time_state_changed = Signal(dict)
 
     QUESTION_VIDEO_NAME = "video_secret.mp4"
     ANSWER_VIDEO_NAME = "video_response.mp4"
+
+    EXTRA_TIME_RULES = {
+        10: 5,
+        15: 10,
+        30: 25,
+        60: 45,
+    }
+
+    MAX_TEAMS = 4
 
     def __init__(self, data_path: str) -> None:
         """
@@ -115,6 +127,12 @@ class GameController(QObject):
         self.round_team_order: list[Team] = []
         self.round_turn_index: int = 0
 
+        self.current_question_extra_time_seconds: int = 0
+        self.current_question_penalty_percent: int = 0
+        self.current_question_time_expired: bool = False
+
+        self.extra_time_usage_by_round: dict[int, dict[int, dict[str, int | bool]]] = {}
+
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self._on_timer_tick)
@@ -126,14 +144,14 @@ class GameController(QObject):
         self.wheel_player.setAudioOutput(self.wheel_audio_output)
 
         self.timer_tick_audio_output = QAudioOutput(self)
-        self.timer_tick_audio_output.setVolume(0.10)
+        self.timer_tick_audio_output.setVolume(0.90)
 
         self.timer_tick_player = QMediaPlayer(self)
         self.timer_tick_player.setAudioOutput(self.timer_tick_audio_output)
         self.timer_tick_player.setLoops(QMediaPlayer.Infinite)
 
         self.timer_heartbeat_audio_output = QAudioOutput(self)
-        self.timer_heartbeat_audio_output.setVolume(0.55)
+        self.timer_heartbeat_audio_output.setVolume(0.85)
 
         self.timer_heartbeat_player = QMediaPlayer(self)
         self.timer_heartbeat_player.setAudioOutput(self.timer_heartbeat_audio_output)
@@ -172,6 +190,7 @@ class GameController(QObject):
         """
         self.display_window = display_window
         self.video_state_changed.emit()
+        self._emit_extra_time_state()
 
     def _save_all(self) -> None:
         """
@@ -226,6 +245,7 @@ class GameController(QObject):
 
         self.round_turn_index = (self.round_turn_index + 1) % len(self.round_team_order)
         self._emit_round_runtime_info()
+        self._emit_extra_time_state()
 
     def _emit_round_runtime_info(self) -> None:
         """
@@ -245,6 +265,7 @@ class GameController(QObject):
         round_id = self.game.state.current_round_id
         if round_id is None:
             self.round_progress_changed.emit("Раунд не выбран")
+            self._emit_extra_time_state()
             return
 
         unused_count = self.game.question_service.get_unused_count_by_round(round_id)
@@ -254,6 +275,7 @@ class GameController(QObject):
         self.round_progress_changed.emit(
             f"Раунд: сыграно {used_count} из {total_count}, осталось {unused_count}"
         )
+        self._emit_extra_time_state()
 
     def _start_wheel_sound(self) -> None:
         """
@@ -585,6 +607,193 @@ class GameController(QObject):
         self.status_changed.emit("Видеоответ отсутствует, текст ответа не задан.")
         self.video_state_changed.emit()
 
+    def _get_current_round_extra_time_bucket(self) -> dict[int, dict[str, int | bool]]:
+        """
+        Return extra-time usage bucket for current round.
+        Вернуть корзину использования допвремени для текущего раунда.
+        """
+        round_id = self.game.state.current_round_id
+        if round_id is None:
+            return {}
+
+        if round_id not in self.extra_time_usage_by_round:
+            self.extra_time_usage_by_round[round_id] = {}
+
+        return self.extra_time_usage_by_round[round_id]
+
+    def _get_team_extra_time_usage(self, team_id: int | None) -> dict[str, int | bool] | None:
+        """
+        Return extra-time usage for team in current round.
+        Вернуть использование допвремени команды в текущем раунде.
+        """
+        if team_id is None:
+            return None
+
+        bucket = self._get_current_round_extra_time_bucket()
+        return bucket.get(team_id)
+
+    def _get_current_award_ratio(self) -> float:
+        """
+        Return award multiplier for current question.
+        Вернуть множитель награды для текущего вопроса.
+        """
+        if self.current_question is None:
+            return 0.0
+
+        if self.current_question_time_expired:
+            return 0.05
+
+        if self.current_question_penalty_percent > 0:
+            return max(0.0, (100 - self.current_question_penalty_percent) / 100.0)
+
+        return 1.0
+
+    def _get_current_award_points(self) -> int:
+        """
+        Return effective award points for current question.
+        Вернуть фактическую награду в очках для текущего вопроса.
+        """
+        if self.current_question is None:
+            return 0
+
+        base_points = max(int(self.current_question.points), 0)
+        ratio = self._get_current_award_ratio()
+
+        if base_points <= 0:
+            return 0
+
+        value = round(base_points * ratio)
+        return max(1, value)
+
+    def _build_extra_time_state_payload(self) -> dict:
+        """
+        Build payload for extra-time UI synchronization.
+        Построить payload для синхронизации UI допвремени.
+        """
+        round_id = self.game.state.current_round_id
+        active_team = self._get_active_team()
+
+        team_states = []
+        bucket = self._get_current_round_extra_time_bucket() if round_id is not None else {}
+
+        for team in self.get_all_teams():
+            team_usage = bucket.get(team.id)
+            used = team_usage is not None
+
+            team_states.append(
+                {
+                    "team_id": team.id,
+                    "team_name": team.name,
+                    "used": used,
+                    "bonus_seconds": int(team_usage["bonus_seconds"]) if used else 0,
+                    "penalty_percent": int(team_usage["penalty_percent"]) if used else 0,
+                    "is_active": active_team is not None and team.id == active_team.id,
+                }
+            )
+
+        base_points = int(self.current_question.points) if self.current_question is not None else 0
+        award_points = self._get_current_award_points()
+
+        if self.current_question_time_expired:
+            award_percent = 5
+        elif self.current_question_penalty_percent > 0:
+            award_percent = 100 - self.current_question_penalty_percent
+        else:
+            award_percent = 100 if self.current_question is not None else 0
+
+        return {
+            "round_id": round_id,
+            "active_team_id": active_team.id if active_team is not None else None,
+            "active_team_name": active_team.name if active_team is not None else "Нет активной команды",
+            "base_points": base_points,
+            "award_points": award_points,
+            "award_percent": award_percent,
+            "time_expired": self.current_question_time_expired,
+            "selected_bonus_seconds": self.current_question_extra_time_seconds,
+            "selected_penalty_percent": self.current_question_penalty_percent,
+            "team_states": team_states,
+            "available_bonus_seconds": list(self.EXTRA_TIME_RULES.keys()),
+        }
+
+    def _emit_extra_time_state(self) -> None:
+        """
+        Emit extra-time UI state.
+        Отправить UI-состояние допвремени.
+        """
+        self.extra_time_state_changed.emit(self._build_extra_time_state_payload())
+
+    def apply_extra_time(self, bonus_seconds: int) -> None:
+        """
+        Apply additional time for active team once per round.
+
+        Award penalty is calculated from base question points.
+        Extra time can be used only once per team in the current round.
+
+        Применить дополнительное время для активной команды один раз за раунд.
+
+        Штраф к награде считается от базовой стоимости вопроса.
+        Допвремя можно использовать только один раз на команду в текущем раунде.
+        """
+        if bonus_seconds not in self.EXTRA_TIME_RULES:
+            self.status_changed.emit("Недопустимый тип дополнительного времени.")
+            return
+
+        round_id = self.game.state.current_round_id
+        if round_id is None:
+            self.status_changed.emit("Сначала выбери раунд.")
+            return
+
+        if self.current_question is None or self.current_question_resolved:
+            self.status_changed.emit("Нет активного вопроса для добавления времени.")
+            return
+
+        if self.current_team_id is None:
+            self.status_changed.emit("Нет активной команды для добавления времени.")
+            return
+
+        if self.current_question_time_expired:
+            self.status_changed.emit("Время уже вышло. Дополнительное время больше недоступно.")
+            return
+
+        if self.remaining_seconds <= 0 and not self.timer.isActive():
+            self.status_changed.emit("Сначала запусти таймер, затем добавляй время.")
+            return
+
+        bucket = self._get_current_round_extra_time_bucket()
+        if self.current_team_id in bucket:
+            team = self.get_team_by_id(self.current_team_id)
+            team_name = team.name if team is not None else f"id={self.current_team_id}"
+            self.status_changed.emit(
+                f"Команда '{team_name}' уже использовала дополнительное время в этом раунде."
+            )
+            self._emit_extra_time_state()
+            return
+
+        penalty_percent = self.EXTRA_TIME_RULES[bonus_seconds]
+
+        self.remaining_seconds += bonus_seconds
+        self.current_question_extra_time_seconds = bonus_seconds
+        self.current_question_penalty_percent = penalty_percent
+
+        bucket[self.current_team_id] = {
+            "used": True,
+            "bonus_seconds": bonus_seconds,
+            "penalty_percent": penalty_percent,
+        }
+
+        self.timer_updated.emit(self.remaining_seconds)
+        self._sync_timer_sound_state()
+
+        team = self.get_team_by_id(self.current_team_id)
+        team_name = team.name if team is not None else f"id={self.current_team_id}"
+
+        self.status_changed.emit(
+            f"Команде '{team_name}' добавлено {bonus_seconds} сек. "
+            f"Награда за вопрос теперь {100 - penalty_percent}% "
+            f"от базовой стоимости."
+        )
+        self._emit_extra_time_state()
+
     def clear_active_question_state(self) -> None:
         """
         Clear active runtime state of current question.
@@ -603,9 +812,15 @@ class GameController(QObject):
         self.remaining_seconds = 0
         self.active_video_mode = None
         self.answer_already_revealed = False
+
+        self.current_question_extra_time_seconds = 0
+        self.current_question_penalty_percent = 0
+        self.current_question_time_expired = False
+
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
         self.video_state_changed.emit()
+        self._emit_extra_time_state()
 
     def select_round(self, round_id: int | None) -> None:
         """
@@ -618,6 +833,7 @@ class GameController(QObject):
             self.round_title_changed.emit("Раунд не выбран")
             self.status_changed.emit("Раунд не выбран.")
             self._emit_round_runtime_info()
+            self._emit_extra_time_state()
             return
 
         self.clear_active_question_state()
@@ -634,6 +850,7 @@ class GameController(QObject):
         self.round_title_changed.emit(round_name)
         self.status_changed.emit(f"Выбран раунд: {round_name}")
         self._emit_round_runtime_info()
+        self._emit_extra_time_state()
 
     def spin_next_question(self) -> None:
         """
@@ -676,6 +893,10 @@ class GameController(QObject):
         self.answer_already_revealed = False
         self.remaining_seconds = 0
 
+        self.current_question_extra_time_seconds = 0
+        self.current_question_penalty_percent = 0
+        self.current_question_time_expired = False
+
         self.game.state.current_team_id = active_team.id
         self.game.state.current_question_id = selected_question.id
 
@@ -690,6 +911,7 @@ class GameController(QObject):
         self.status_changed.emit(f"Колесо вращается. Отвечает команда: {active_team.name}")
         self._emit_round_runtime_info()
         self.video_state_changed.emit()
+        self._emit_extra_time_state()
 
     def on_public_wheel_finished(self) -> None:
         """
@@ -720,6 +942,8 @@ class GameController(QObject):
                 self.video_state_changed.emit()
         else:
             self.video_state_changed.emit()
+
+        self._emit_extra_time_state()
 
     def on_video_finished(self) -> None:
         """
@@ -779,6 +1003,10 @@ class GameController(QObject):
             self.status_changed.emit("Нет активного вопроса для запуска таймера.")
             return
 
+        if self.current_question_time_expired and self.remaining_seconds <= 0:
+            self.status_changed.emit("Время по этому вопросу уже истекло. Повторный запуск недоступен.")
+            return
+
         if self.remaining_seconds <= 0:
             self.remaining_seconds = self.game.question_service.get_question_timer(
                 self.current_question
@@ -793,6 +1021,7 @@ class GameController(QObject):
 
         self.timer_started.emit()
         self.status_changed.emit("Таймер запущен.")
+        self._emit_extra_time_state()
 
     def pause_timer(self) -> None:
         """
@@ -804,16 +1033,21 @@ class GameController(QObject):
             self._stop_all_timer_sounds()
             self.timer_paused.emit()
             self.status_changed.emit("Таймер поставлен на паузу.")
+            self._emit_extra_time_state()
 
     def stop_timer(self) -> None:
         """
         Stop timer and reset current countdown value.
-        Остановить таймер и сбросить текущее значение отсчета.
+
+        If question time already expired, keep zero to prevent abuse.
+        Если время по вопросу уже истекло, сохранить ноль, чтобы нельзя было обойти правило.
         """
         self.timer.stop()
         self._stop_all_timer_sounds()
 
-        if self.current_question is not None:
+        if self.current_question_time_expired:
+            self.remaining_seconds = 0
+        elif self.current_question is not None:
             self.remaining_seconds = self.game.question_service.get_question_timer(
                 self.current_question
             )
@@ -823,6 +1057,7 @@ class GameController(QObject):
         self.timer_updated.emit(self.remaining_seconds)
         self.timer_stopped.emit()
         self.status_changed.emit("Таймер остановлен.")
+        self._emit_extra_time_state()
 
     def is_video_question_context(self) -> bool:
         """
@@ -898,9 +1133,24 @@ class GameController(QObject):
         if not self.answer_already_revealed:
             self._reveal_answer(self.current_question)
 
-        self.game.score_service.add_points(self.current_team_id, self.current_question.points)
+        awarded_points = self._get_current_award_points()
+        self.game.score_service.add_points(self.current_team_id, awarded_points)
         self.game.state.last_result_correct = True
-        self._finalize_current_question("Ответ засчитан.")
+
+        if self.current_question_time_expired:
+            status_text = (
+                f"Ответ засчитан после истечения времени. "
+                f"Начислено {awarded_points} очков (5% от базовой награды)."
+            )
+        elif self.current_question_penalty_percent > 0:
+            status_text = (
+                f"Ответ засчитан. Начислено {awarded_points} очков "
+                f"({100 - self.current_question_penalty_percent}% от базовой награды)."
+            )
+        else:
+            status_text = f"Ответ засчитан. Начислено {awarded_points} очков."
+
+        self._finalize_current_question(status_text)
 
     def mark_wrong(self) -> None:
         """
@@ -938,6 +1188,7 @@ class GameController(QObject):
         finished_question_id = self.current_question.id
         finished_round_id = self.game.state.current_round_id
         finished_team_id = self.current_team_id
+        awarded_points = self._get_current_award_points() if self.game.state.last_result_correct else 0
 
         self.game.question_service.mark_used(finished_question_id)
 
@@ -947,7 +1198,11 @@ class GameController(QObject):
                 f"team={finished_team_id}; "
                 f"question={finished_question_id}; "
                 f"media={getattr(self.current_question, 'media_type', None)}; "
-                f"correct={self.game.state.last_result_correct}"
+                f"correct={self.game.state.last_result_correct}; "
+                f"extra_time={self.current_question_extra_time_seconds}; "
+                f"penalty_percent={self.current_question_penalty_percent}; "
+                f"time_expired={self.current_question_time_expired}; "
+                f"awarded_points={awarded_points}"
             )
         )
 
@@ -959,6 +1214,11 @@ class GameController(QObject):
         self.current_team_id = None
         self.remaining_seconds = 0
         self.active_video_mode = None
+
+        self.current_question_extra_time_seconds = 0
+        self.current_question_penalty_percent = 0
+        self.current_question_time_expired = False
+
         self._stop_all_timer_sounds()
         self.timer_updated.emit(0)
         self.timer_stopped.emit()
@@ -966,6 +1226,7 @@ class GameController(QObject):
 
         self._advance_turn()
         self.questions_changed.emit()
+        self._emit_extra_time_state()
 
         if finished_round_id is not None:
             if self.game.question_service.get_unused_count_by_round(finished_round_id) == 0:
@@ -994,11 +1255,14 @@ class GameController(QObject):
             self._sync_timer_sound_state()
 
         if self.remaining_seconds <= 0:
+            self.remaining_seconds = 0
+            self.current_question_time_expired = True
             self.timer.stop()
             self._stop_all_timer_sounds()
             self._play_gong()
             self.timer_stopped.emit()
             self.status_changed.emit("Время вышло.")
+            self._emit_extra_time_state()
 
     def get_questions_for_round(self, round_id: int | None = None) -> list[Question]:
         """
@@ -1015,6 +1279,7 @@ class GameController(QObject):
         self._save_all()
         self.questions_changed.emit()
         self._emit_round_runtime_info()
+        self._emit_extra_time_state()
 
     def reset_current_question(self, question_id: int) -> None:
         """
@@ -1043,8 +1308,14 @@ class GameController(QObject):
             self.round_team_order = self._build_round_team_order()
             self.round_turn_index = 0
 
+        if round_id in self.extra_time_usage_by_round:
+            self.extra_time_usage_by_round[round_id].clear()
+
         self.save_questions_state()
-        self.status_changed.emit(f"Сброшено вопросов в раунде: {count}")
+        self.status_changed.emit(
+            f"Сброшено вопросов в раунде: {count}. Дополнительное время раунда также очищено."
+        )
+        self._emit_extra_time_state()
 
     def reset_all_questions(self) -> None:
         """
@@ -1058,8 +1329,13 @@ class GameController(QObject):
             self.round_team_order = self._build_round_team_order()
             self.round_turn_index = 0
 
+        self.extra_time_usage_by_round.clear()
+
         self.save_questions_state()
-        self.status_changed.emit(f"Сброшено всех вопросов: {count}")
+        self.status_changed.emit(
+            f"Сброшено всех вопросов: {count}. Состояние дополнительного времени очищено."
+        )
+        self._emit_extra_time_state()
 
     def set_question_used(self, question_id: int, used: bool) -> None:
         """
@@ -1228,6 +1504,10 @@ class GameController(QObject):
             self.status_changed.emit("Название команды не может быть пустым.")
             return
 
+        if len(self.game.teams) >= self.MAX_TEAMS:
+            self.status_changed.emit("Нельзя добавить больше 4 команд.")
+            return
+
         if any(team.name.casefold() == normalized_name.casefold() for team in self.game.teams):
             self.status_changed.emit("Команда с таким названием уже существует.")
             return
@@ -1242,6 +1522,7 @@ class GameController(QObject):
         self.scoreboard_changed.emit(self.game.teams)
         self.teams_changed.emit()
         self._emit_round_runtime_info()
+        self._emit_extra_time_state()
         self.status_changed.emit(f"Команда '{team.name}' добавлена.")
 
     def update_team(self, team_id: int, name: str) -> None:
@@ -1270,6 +1551,7 @@ class GameController(QObject):
         self.scoreboard_changed.emit(self.game.teams)
         self.teams_changed.emit()
         self._emit_round_runtime_info()
+        self._emit_extra_time_state()
         self.status_changed.emit(f"Команда #{team.id} обновлена.")
 
     def delete_team(self, team_id: int) -> None:
@@ -1293,9 +1575,14 @@ class GameController(QObject):
             self.current_team_id = None
             self.game.state.current_team_id = None
 
+        for round_bucket in self.extra_time_usage_by_round.values():
+            if team_id in round_bucket:
+                del round_bucket[team_id]
+
         self.scoreboard_changed.emit(self.game.teams)
         self.teams_changed.emit()
         self._emit_round_runtime_info()
+        self._emit_extra_time_state()
         self.status_changed.emit(f"Команда '{removed_team.name}' удалена.")
 
     def get_all_rounds(self) -> list[Round]:
@@ -1363,6 +1650,7 @@ class GameController(QObject):
         if self.game.state.current_round_id == round_id:
             self.round_title_changed.emit(round_item.name)
         self.status_changed.emit(f"Раунд #{round_item.id} обновлен.")
+        self._emit_extra_time_state()
 
     def delete_round(self, round_id: int) -> None:
         """
@@ -1384,6 +1672,9 @@ class GameController(QObject):
         removed_round = self.game.round_service.delete_round(round_id)
         self._save_all()
 
+        if round_id in self.extra_time_usage_by_round:
+            del self.extra_time_usage_by_round[round_id]
+
         if self.game.state.current_round_id == round_id:
             remaining_rounds = self.get_all_rounds()
             if remaining_rounds:
@@ -1393,6 +1684,7 @@ class GameController(QObject):
 
         self.rounds_changed.emit()
         self.status_changed.emit(f"Раунд '{removed_round.name}' удален.")
+        self._emit_extra_time_state()
 
     def get_active_team_name(self) -> str:
         """
@@ -1442,6 +1734,7 @@ def run_app() -> int:
     controller.timer_paused.connect(display_window.timer_widget.set_paused)
     controller.timer_stopped.connect(display_window.timer_widget.set_stopped)
     controller.video_requested.connect(display_window.play_video)
+    controller.extra_time_state_changed.connect(display_window.update_extra_time_state)
 
     controller.wheel_spin_requested.connect(
         lambda labels, index: display_window.start_wheel_animation(
@@ -1453,6 +1746,7 @@ def run_app() -> int:
     display_window.video_finished.connect(controller.on_video_finished)
 
     controller.scoreboard_changed.emit(controller.game.teams)
+    controller._emit_extra_time_state()
 
     if controller.game.rounds:
         first_round_id = controller.game.rounds[0].id
@@ -1461,6 +1755,7 @@ def run_app() -> int:
     else:
         controller.round_title_changed.emit("Раунды отсутствуют")
         controller.status_changed.emit("Сначала добавь раунды и вопросы в настройках игры.")
+        controller._emit_extra_time_state()
 
     admin_window.show()
     display_window.hide()
